@@ -8,6 +8,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 import sys
 import os
+import random
 
 # Add the OpenRA directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -17,6 +18,21 @@ from OpenRA.MainProgram import Fire, FireFighter, Truck, Drone, astar
 app = Flask(__name__)
 CORS(app)
 
+# --- Root endpoint ---
+@app.route('/')
+def index():
+    return jsonify({
+        'message': 'Firefighting AI API',
+        'endpoints': [
+            '/api/state',
+            '/api/step',
+            '/api/add_fire',
+            '/api/reset',
+            '/api/add_water',
+            '/api/unit/<name>/refill'
+        ]
+    })
+
 # --- Game State ---
 GRID_SIZE = (40, 40)
 fires = []
@@ -25,7 +41,6 @@ water_sources = []
 
 def init_state():
     """Initialize default fires and units"""
-    import random
     global fires, units, water_sources
     
     fires = [
@@ -159,7 +174,6 @@ def step_simulation():
 @app.route('/api/add_fire', methods=['POST'])
 def add_fire():
     """Add a new fire at random or specified position"""
-    import random
     data = request.json or {}
     
     x = data.get('x', random.randint(0, 39))
@@ -179,7 +193,6 @@ def reset():
 @app.route('/api/add_water', methods=['POST'])
 def add_water():
     """Add a water source at random or specified position"""
-    import random
     data = request.json or {}
     
     x = data.get('x', random.randint(0, 39))
