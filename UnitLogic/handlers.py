@@ -14,7 +14,7 @@ class UnitDecision:
     extra_json: dict | None = None
 
 
-class BaseHandler:
+class Firecopter:
     extinguish_range = 2
     low_water_threshold = 2
 
@@ -33,15 +33,6 @@ class BaseHandler:
             return UnitDecision(OperationId.DOWN if dy > 0 else OperationId.UP)
 
         return UnitDecision(OperationId.NOP)
-
-
-class Firecopter(BaseHandler):
-    """
-    Drone-style unit logic:
-    - refill when water is low
-    - prefer isolated fires so other units can cover closer clusters
-    - extinguish once close enough, otherwise move one step toward the target
-    """
 
     def choose_target(self, unit: Unit, context: UnitLogicContext) -> FireTarget | None:
         if not context.fires:
