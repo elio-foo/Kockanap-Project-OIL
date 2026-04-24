@@ -21,11 +21,12 @@ CORS(app)
 GRID_SIZE = (40, 40)
 fires = []
 units = []
+water_sources = []
 
 def init_state():
     """Initialize default fires and units"""
     import random
-    global fires, units
+    global fires, units, water_sources
     
     fires = [
         Fire((random.randint(0, 39), random.randint(0, 39)), random.randint(100, 400))
@@ -37,6 +38,12 @@ def init_state():
         Truck((10, 10)),
         Drone((30, 30)),
     ]
+    
+    # Random water sources (5-8 sources)
+    water_sources = [
+        (random.randint(0, 39), random.randint(0, 39))
+        for _ in range(random.randint(5, 8))
+    ]
 
 init_state()
 
@@ -47,7 +54,23 @@ def get_state():
     """Get current simulation state"""
     return jsonify({
         'fires': [{'x': f.position[0], 'y': f.position[1], 'intensity': f.intensity} for f in fires],
-        'units': [{'name': u.name, 'x': u.position[0], 'y': u.position[1], 'hp': u.hp, 'max_hp': u.max_hp, 'water': u.water, 'max_water': u.max_water} for u in units],
+        'units': [
+            {
+                'name': u.name,
+                'x': u.position[0],
+                'y': u.position[1],
+                'hp': u.hp,
+                'max_hp': u.max_hp,
+                'water': u.water,
+                'max_water': u.max_water,
+                'damage': u.damage,
+                'sight': u.sight,
+                'speed': u.speed,
+                'path': [{'x': p[0], 'y': p[1]} for p in u.path] if hasattr(u, 'path') else [],
+                'target': {'x': u.target.position[0], 'y': u.target.position[1]} if u.target else None
+            } for u in units
+        ],
+        'water_sources': [{'x': w[0], 'y': w[1]} for w in water_sources],
         'grid_size': GRID_SIZE
     })
 
@@ -59,6 +82,21 @@ def step_simulation():
     # Each unit acts
     for unit in units:
         if not fires:
+            continue
+        
+        # Check if unit needs water refill - go to nearest water source
+        if unit.needs_refill():
+            nearest_water = min(water_sources, key=lambda w: unit.distance(unit.position, w))
+            if unit.distance(unit.position, nearest_water) <= 1:
+                # At water source - refill
+                unit.water = unit.max_water
+            else:
+                # Move toward water source
+                path = astar(unit.position, nearest_water, GRID_SIZE)
+                if path:
+                    unit.path = path
+                    unit.move()
+            # Skip fire fighting if needs water
             continue
             
         # Choose target
@@ -99,7 +137,23 @@ def step_simulation():
     
     return jsonify({
         'fires': [{'x': f.position[0], 'y': f.position[1], 'intensity': f.intensity} for f in fires],
-        'units': [{'name': u.name, 'x': u.position[0], 'y': u.position[1], 'hp': u.hp, 'max_hp': u.max_hp, 'water': u.water, 'max_water': u.max_water} for u in units]
+        'units': [
+            {
+                'name': u.name,
+                'x': u.position[0],
+                'y': u.position[1],
+                'hp': u.hp,
+                'max_hp': u.max_hp,
+                'water': u.water,
+                'max_water': u.max_water,
+                'damage': u.damage,
+                'sight': u.sight,
+                'speed': u.speed,
+                'path': [{'x': p[0], 'y': p[1]} for p in u.path] if hasattr(u, 'path') else [],
+                'target': {'x': u.target.position[0], 'y': u.target.position[1]} if u.target else None
+            } for u in units
+        ],
+        'water_sources': [{'x': w[0], 'y': w[1]} for w in water_sources]
     })
 
 @app.route('/api/add_fire', methods=['POST'])
@@ -121,6 +175,20 @@ def reset():
     """Reset simulation to initial state"""
     init_state()
     return jsonify({'success': True})
+
+@app.route('/api/add_water', methods=['POST'])
+def add_water():
+    """Add a water source at random or specified position"""
+    import random
+    data = request.json or {}
+    
+    x = data.get('x', random.randint(0, 39))
+    y = data.get('y', random.randint(0, 39))
+    
+    if (x, y) not in water_sources:
+        water_sources.append((x, y))
+    
+    return jsonify({'success': True, 'water_sources': [{'x': w[0], 'y': w[1]} for w in water_sources]})
 
 @app.route('/api/unit/<name>/refill', methods=['POST'])
 def refill_unit(name):

@@ -10,6 +10,13 @@
     .unit-F { color: #00ff88; }
     .unit-T { color: #00aaff; }
     .unit-D { color: #ff00ff; }
+    #stats { margin-top: 10px; padding: 10px; background: #222; border-radius: 5px; }
+    .unit-stat { margin: 5px 0; padding: 5px; background: #333; border-left: 3px solid; }
+    .unit-stat.FireFighter { border-color: #00ff88; }
+    .unit-stat.Truck { border-color: #00aaff; }
+    .unit-stat.Drone { border-color: #ff00ff; }
+    #legend { margin-top: 10px; font-size: 12px; }
+    #legend span { margin-right: 15px; }
   </style>
 </head>
 <body>
@@ -19,10 +26,23 @@
 <button onclick="toggleRun()">Start / Pause</button>
 <button onclick="toggleInfluence()">Influence</button>
 <button onclick="toggleThreat()">Threat</button>
+<button onclick="togglePaths()">Paths</button>
 <button onclick="addFire()">Add Fire</button>
+<button onclick="addWater()">Add Water</button>
 <span id="status" style="margin-left: 20px; color: #888;">Connected to Flask API</span>
 
+<div id="legend">
+  <span style="color:#00ff88">■ FireFighter</span>
+  <span style="color:#00aaff">■ Truck</span>
+  <span style="color:#ff00ff">■ Drone</span>
+  <span style="color:red">■ Fire</span>
+  <span style="color:#00ffff">■ Water Source</span>
+  <span style="color:#666">■ Path</span>
+</div>
+
 <div id="grid"></div>
+
+<div id="stats"></div>
 
 <script>
 const SIZE = 40;
@@ -33,9 +53,11 @@ grid.style.gridTemplateColumns = `repeat(${SIZE}, 12px)`;
 // --- State ---
 let fires = [];
 let units = [];
+let waterSources = [];
 let running = false;
 let showInfluence = true;
 let showThreat = true;
+let showPaths = true;
 
 const criticalPoints = [{x:20,y:20}];
 
@@ -50,7 +72,9 @@ async function fetchState() {
     const data = await res.json();
     fires = data.fires;
     units = data.units;
+    waterSources = data.water_sources || [];
     draw();
+    updateStats();
   } catch(e) {
     document.getElementById('status').textContent = '⚠️ Flask not connected';
     document.getElementById('status').style.color = 'orange';
@@ -63,7 +87,9 @@ async function stepSimulation() {
     const data = await res.json();
     fires = data.fires;
     units = data.units;
+    waterSources = data.water_sources || [];
     draw();
+    updateStats();
   } catch(e) {
     console.error('Step error:', e);
   }
@@ -78,60 +104,6 @@ async function addFireAPI() {
   }
 }
 
-// --- Entities ---
-class Fire {
-  constructor(x,y,i){this.x=x;this.y=y;this.intensity=i;}
-}
-
-class Unit {
-  constructor(name,x,y,dmg,sight){
-    this.name=name;
-    this.x=x; this.y=y;
-    this.dmg=dmg;
-    this.sight=sight;
-    this.target=null;
-  }
-
-  choose(fires){
-    return fires.reduce((a,b)=>dist(this,a)<dist(this,b)?a:b);
-  }
-
-  computeWeights(fires){
-    let w={};
-    for(let f of fires){
-      let cluster=0;
-      for(let o of fires){
-        let d=dist(f,o);
-        if(d<=3) cluster+=o.intensity/(d+1);
-      }
-      let threat=Math.min(...criticalPoints.map(p=>dist(f,p)));
-      let score=cluster-threat*0.5;
-      w[`${f.x},${f.y}`]=Math.max(0.1,1-score*0.001);
-    }
-    return w;
-  }
-
-  step(fires){
-    if(!fires.length) return;
-
-    if(!this.target || this.target.intensity<=0){
-      this.target=this.choose(fires);
-    }
-
-    // Extinguish from 2 blocks away (not within sight range)
-    if(dist(this,this.target)<=2){
-      this.target.intensity-=this.dmg;
-    } else {
-      // simple movement (replace with A*)
-      if(this.target.x>this.x) this.x++;
-      else if(this.target.x<this.x) this.x--;
-
-      if(this.target.y>this.y) this.y++;
-      else if(this.target.y<this.y) this.y--;
-    }
-  }
-}
-
 // --- Init ---
 async function init(){
   await fetchState();
@@ -141,9 +113,25 @@ async function init(){
 function toggleRun(){ running=!running; }
 function toggleInfluence(){ showInfluence=!showInfluence; draw(); }
 function toggleThreat(){ showThreat=!showThreat; draw(); }
+function togglePaths(){ showPaths=!showPaths; draw(); }
 
 function addFire(){
   addFireAPI();
+}
+
+async function addWaterAPI() {
+  try {
+    const res = await fetch(`${API_URL}/add_water`, {method: 'POST'});
+    const data = await res.json();
+    waterSources = data.water_sources;
+    draw();
+  } catch(e) {
+    console.error('Add water error:', e);
+  }
+}
+
+function addWater(){
+  addWaterAPI();
 }
 
 // --- Simulation loop ---
@@ -151,15 +139,41 @@ function loop(){
   if(running){
     stepSimulation();
   }
-  // Note: draw() is called in fetchState/stepSimulation
-  setTimeout(loop, 200); // 5 steps per second
+  setTimeout(loop, 200);
+}
+
+// --- Update Stats Panel ---
+function updateStats(){
+  const statsDiv = document.getElementById('stats');
+  statsDiv.innerHTML = '<h3>Unit Stats</h3>';
+  
+  for(let u of units){
+    const hpPercent = (u.hp / u.max_hp) * 100;
+    const waterPercent = u.max_water === Infinity ? 100 : (u.water / u.max_water) * 100;
+    
+    statsDiv.innerHTML += `
+      <div class="unit-stat ${u.name}">
+        <strong>${u.name}</strong><br>
+        HP: <span style="color:${hpPercent < 30 ? 'red' : '#00ff88'}">${u.hp}/${u.max_hp}</span> 
+        (${hpPercent.toFixed(0)}%)<br>
+        Water: <span style="color:${waterPercent < 30 ? 'orange' : '#00ffff'}">${u.water}/${u.max_water === Infinity ? '∞' : u.max_water}</span><br>
+        Damage: ${u.damage} | Sight: ${u.sight} | Speed: ${u.speed}<br>
+        Position: (${u.x}, ${u.y})
+        ${u.target ? `<br>Target: (${u.target.x}, ${u.target.y})` : ''}
+      </div>
+    `;
+  }
+  
+  statsDiv.innerHTML += `
+    <h3>Fire Stats</h3>
+    <div>Active fires: ${fires.length}</div>
+    <div>Water sources: ${waterSources.length}</div>
+  `;
 }
 
 // --- Draw ---
 function draw(){
   grid.innerHTML="";
-
-  let weights = units[0]?.computeWeights?.(fires) || {};
 
   for(let y=0;y<SIZE;y++){
     for(let x=0;x<SIZE;x++){
@@ -169,15 +183,56 @@ function draw(){
 
       let fire = fires.find(f=>f.x===x && f.y===y);
       let unit = units.find(u=>u.x===x && u.y===y);
+      let water = waterSources.find(w=>w.x===x && w.y===y);
 
       let bg="#111";
 
-      if(showInfluence){
-        let w = weights[`${x},${y}`];
-        if(w) bg = `rgba(255,165,0,${1-w})`;
+      // Draw paths
+      if(showPaths){
+        for(let u of units){
+          if(u.path){
+            for(let p of u.path){
+              if(p.x===x && p.y===y && !(unit && unit.x===x && unit.y===y)){
+                bg = "#444";
+              }
+            }
+          }
+        }
       }
 
+      if(showInfluence && !fire && !unit && !water){
+        // Simplified influence display
+      }
+
+      if(water) bg="#00ffff";
+
       if(fire) bg="red";
+      
+      // Different colors for different units
+      if(unit){
+        if(unit.name === 'FireFighter') bg="#00ff88";
+        else if(unit.name === 'Truck') bg="#00aaff";
+        else if(unit.name === 'Drone') bg="#ff00ff";
+        else bg="cyan";
+      }
+
+      if(showThreat && criticalPoints.some(p=>p.x===x && p.y===y)){
+        bg="purple";
+      }
+
+      cell.style.background = bg;
+      grid.appendChild(cell);
+    }
+  }
+}
+
+// --- Start ---
+init();
+loop();
+
+</script>
+</body>
+</html>
       
       // Different colors for different units
       if(unit){
