@@ -5,12 +5,6 @@ class Unit:
 
     def __init__(
         self,
-        # id: int,
-        # owner: str,
-        # unittype: UnitType,
-        # position: Position,
-        # currentWaterLevel: int,
-        # currentHP: int
         unit_id=None,
         owner="",
         unit_type=None,
@@ -24,12 +18,7 @@ class Unit:
         self.position: Position | None = position
         self.currentWaterLevel: int = current_water_level
         self.currentHP: int = current_hp
-        # self.id = id
-        # self.owner = owner
-        # self.type = type
-        # self.position = position
-        # self.currentWaterLevel = CurrentWaterLevel
-        # self.currentHP = currentHP
+
 
     def from_json(self, json_data):
         position_data = json_data.get("Position") or {}

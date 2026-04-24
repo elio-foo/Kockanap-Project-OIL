@@ -1,9 +1,3 @@
-"""
-Flask API Server for Firefighting AI
-====================================
-Provides HTTP endpoints to interface with MainProgram.py
-"""
-
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import sys
