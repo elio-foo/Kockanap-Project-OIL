@@ -53,6 +53,27 @@ class MapTracker:
 
         self._write_map(unit_overlays)
 
+    def get_known_cells(self) -> dict[tuple[int, int], str]:
+        return dict(self._known_cells)
+
+    def get_frontier_cells(self) -> set[tuple[int, int]]:
+        frontier_cells: set[tuple[int, int]] = set()
+
+        for coordinates in self._known_cells:
+            if self._has_unknown_neighbor(coordinates):
+                frontier_cells.add(coordinates)
+
+        return frontier_cells
+
+    def count_unknown_neighbors(self, coordinates: tuple[int, int]) -> int:
+        unknown_neighbors = 0
+
+        for neighbor in self._neighbors_of(coordinates):
+            if neighbor not in self._known_cells:
+                unknown_neighbors += 1
+
+        return unknown_neighbors
+
     def _visible_cells_for_unit(self, unit: Unit) -> set[tuple[int, int]]:
         if unit.position is None:
             return set()
@@ -107,6 +128,20 @@ class MapTracker:
             map_contents.append(f"{y:>4} {' '.join(row_cells)}")
 
         self.map_path.write_text("\n".join(map_contents) + "\n", encoding="utf-8")
+
+    def _has_unknown_neighbor(self, coordinates: tuple[int, int]) -> bool:
+        return any(neighbor not in self._known_cells for neighbor in self._neighbors_of(coordinates))
+
+    @staticmethod
+    def _neighbors_of(coordinates: tuple[int, int]) -> tuple[tuple[int, int], ...]:
+        x, y = coordinates
+        neighbors = (
+            (x + 1, y),
+            (x - 1, y),
+            (x, y + 1),
+            (x, y - 1),
+        )
+        return tuple(neighbor for neighbor in neighbors if neighbor[0] >= 0 and neighbor[1] >= 0)
 
     @classmethod
     def _symbol_for_unit(cls, unit: Unit) -> str:

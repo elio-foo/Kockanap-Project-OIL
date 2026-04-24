@@ -27,12 +27,12 @@ class FiretruckLogic(BaseUnitLogic):
 
 
 class FirecopterLogic(BaseUnitLogic):
-    _MOVE_OPTIONS = (
-        ("right", (1, 0)),
-        ("down", (0, 1)),
-        ("left", (-1, 0)),
-        ("up", (0, -1)),
-    )
+    _DIRECTION_VECTORS = {
+        "right": (1, 0),
+        "down": (0, 1),
+        "left": (-1, 0),
+        "up": (0, -1),
+    }
 
     def __init__(self) -> None:
         self._roam_state_by_unit: dict[int, dict[str, object]] = {}
@@ -109,6 +109,7 @@ class FirecopterLogic(BaseUnitLogic):
         direction, target = move_choice
         state["last_position"] = current_position
         state["last_attempted_target"] = target
+        state["last_attempted_direction"] = direction
         return direction
 
     def _get_or_create_roam_state(self, unit: Unit) -> dict[str, object]:
@@ -121,12 +122,14 @@ class FirecopterLogic(BaseUnitLogic):
 
         origin = (unit.position.x, unit.position.y)
         state: dict[str, object] = {
-            "origin": (unit.position.x, unit.position.y),
+            "origin": origin,
             "last_position": origin,
             "last_attempted_target": None,
+            "last_attempted_direction": None,
+            "phase": "sweep",
+            "sweep_direction": "right",
+            "vertical_direction": "down",
             "blocked_cells": set(),
-            "visit_counts": {origin: 1},
-            "move_cursor": 0,
         }
         self._roam_state_by_unit[unit.id] = state
         return state
@@ -142,10 +145,12 @@ class FirecopterLogic(BaseUnitLogic):
         if unit.position is not None:
             state["last_position"] = (unit.position.x, unit.position.y)
         state["last_attempted_target"] = None
+        state["last_attempted_direction"] = None
 
     def _apply_roam_feedback(self, state: dict[str, object], current_position: tuple[int, int]) -> None:
-        last_position = state["last_position"]
-        last_attempted_target = state["last_attempted_target"]
+        last_position = state.get("last_position")
+        last_attempted_target = state.get("last_attempted_target")
+        phase = state.get("phase")
 
         if (
             isinstance(last_position, tuple)
@@ -153,61 +158,72 @@ class FirecopterLogic(BaseUnitLogic):
             and current_position == last_position
         ):
             self._mark_blocked(state, last_attempted_target)
-        else:
-            visit_counts = state.get("visit_counts")
-            if isinstance(visit_counts, dict):
-                visit_counts[current_position] = visit_counts.get(current_position, 0) + 1
+            if phase == "sweep":
+                state["phase"] = "shift_row"
+            elif phase == "shift_row":
+                state["phase"] = "done"
+        elif phase == "shift_row":
+            state["phase"] = "sweep"
+            state["sweep_direction"] = self._reverse_horizontal_direction(
+                state.get("sweep_direction")
+            )
 
         state["last_position"] = current_position
         state["last_attempted_target"] = None
+        state["last_attempted_direction"] = None
 
     def _choose_roam_move(
         self,
         state: dict[str, object],
         current_position: tuple[int, int],
     ) -> tuple[str, tuple[int, int]] | None:
-        origin = state.get("origin")
         blocked_cells = state.get("blocked_cells")
-        visit_counts = state.get("visit_counts")
-        move_cursor = state.get("move_cursor", 0)
-
-        if not isinstance(origin, tuple):
-            return None
         if not isinstance(blocked_cells, set):
             return None
-        if not isinstance(visit_counts, dict):
-            return None
-        if not isinstance(move_cursor, int):
-            move_cursor = 0
 
-        scored_moves: list[tuple[tuple[int, int, int, int], str, tuple[int, int]]] = []
+        for _ in range(4):
+            phase = state.get("phase")
+            if phase == "done":
+                return None
 
-        for offset in range(len(self._MOVE_OPTIONS)):
-            direction, (dx, dy) = self._MOVE_OPTIONS[(move_cursor + offset) % len(self._MOVE_OPTIONS)]
-            target = (current_position[0] + dx, current_position[1] + dy)
+            direction = state.get("vertical_direction") if phase == "shift_row" else state.get("sweep_direction")
+            if not isinstance(direction, str):
+                return None
 
+            target = self._apply_direction(current_position, direction)
             if target[0] < 0 or target[1] < 0:
                 self._mark_blocked(state, target)
-                continue
+                if phase == "sweep":
+                    state["phase"] = "shift_row"
+                    continue
+                state["phase"] = "done"
+                return None
 
             if target in blocked_cells:
-                continue
+                if phase == "sweep":
+                    state["phase"] = "shift_row"
+                    continue
+                state["phase"] = "done"
+                return None
 
-            visit_count = visit_counts.get(target, 0)
-            distance_from_origin = self._distance_tuple(origin, target)
-            distance_from_current = self._distance_tuple(current_position, target)
+            return direction, target
 
-            # Prefer less-visited tiles first, then stay relatively close to the starting area,
-            # while still rotating tie-breaks so the copter doesn't bias one direction forever.
-            score = (visit_count, distance_from_origin, offset, distance_from_current)
-            scored_moves.append((score, direction, target))
+        return None
 
-        if not scored_moves:
-            return None
+    @classmethod
+    def _reverse_horizontal_direction(cls, direction: object) -> str:
+        if direction == "left":
+            return "right"
+        return "left"
 
-        _, direction, target = min(scored_moves, key=lambda item: item[0])
-        state["move_cursor"] = (move_cursor + 1) % len(self._MOVE_OPTIONS)
-        return direction, target
+    @classmethod
+    def _apply_direction(
+        cls,
+        current_position: tuple[int, int],
+        direction: str,
+    ) -> tuple[int, int]:
+        dx, dy = cls._DIRECTION_VECTORS[direction]
+        return (current_position[0] + dx, current_position[1] + dy)
 
     @staticmethod
     def _mark_blocked(state: dict[str, object], coordinates: tuple[int, int]) -> None:
