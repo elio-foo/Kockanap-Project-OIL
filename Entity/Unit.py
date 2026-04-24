@@ -1,4 +1,5 @@
 from Entity import *
+from Message import *
 
 class Unit:
 

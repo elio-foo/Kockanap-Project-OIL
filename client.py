@@ -6,20 +6,15 @@ import time
 import asyncio
 import json
 
-class Response:
-    def __init__(self, raw_data):
-        self.teamName = raw_data.teamName
-        self.counter = raw_data.counter
-        self.operation = raw_data.operation
-        self.extraJson = raw_data.extraJson
+from Message import *
 
 async def message_generator():
-    for i in range(5):
+    for i in range(1):
         msg = greeter_pb2.CommandMessage(
             teamName = "ObudaInnovationLab",
             counter = i + 1,
-            unitId = 123,
-            operation = "NOP",
+            unitId = 43,
+            operation = "Left",
             extraJson = "{}",
         )
 
@@ -27,6 +22,12 @@ async def message_generator():
 
         yield msg
         await asyncio.sleep(1)
+
+def handle_server_message(message: CommandMessage):
+    print(message.teamName)
+    print(message.counter)
+    print(message.operation)
+    print(json.dumps(message.extraJson, indent=2))
         
 async def run_stream():
     async with grpc.aio.insecure_channel("10.4.4.59:5001") as channel:
@@ -38,13 +39,10 @@ async def run_stream():
 
         print("Response:", response.message)
 
-        responses = stub.CommunicateWithStreams()
+        responses = stub.CommunicateWithStreams(message_generator())
 
         async for resp in responses:
-            r = Response(resp)
-
-            print(r.teamName)
-
+            handle_server_message(CommandMessage(resp))
 
 if __name__ == "__main__":
     asyncio.run(run_stream())
