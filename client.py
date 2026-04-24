@@ -6,8 +6,14 @@ import time
 import asyncio
 import json
 
+class Response():
+    pass
+
+class ServerData():
+    pass
+
 def message_generator():
-    for i in range(5):
+    for i in range(1):
         msg = greeter_pb2.CommandMessage(
             teamName = "ObudaInnovationLab",
             counter = i + 1,
@@ -35,9 +41,9 @@ def run_stream():
         responses = stub.CommunicateWithStreams(message_generator())
 
         for resp in responses:
-            print("Recieved: ", resp.extraJson)
-            # data = json.loads(resp.extraJson)
-            # print(json.dumps(data, indent=2))
+            # print("Recieved: ", resp)
+            data = json.loads(resp.extraJson)
+            print(json.dumps(data, indent=2))
 
 
 if __name__ == "__main__":
