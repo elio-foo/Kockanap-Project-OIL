@@ -231,10 +231,24 @@ async def run():
             try:
                 async for response in call:
                     handle_incoming(CommandMessage(response), units_by_id)
+            except asyncio.CancelledError:
+                raise
             except grpc.aio.AioRpcError as e:
-                print("ERROR: ", e)
+                if e.code() != grpc.StatusCode.CANCELLED:
+                    print("ERROR: ", e)
 
-        await asyncio.gather(receiver(), command_loop(send_queue, units_by_id, command_counter))
+        receiver_task = asyncio.create_task(receiver())
+
+        try:
+            await command_loop(send_queue, units_by_id, command_counter)
+        finally:
+            call.cancel()
+            receiver_task.cancel()
+
+            try:
+                await receiver_task
+            except asyncio.CancelledError:
+                pass
 
 if __name__ == "__main__":
     asyncio.run(run())
