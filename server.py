@@ -47,7 +47,7 @@ def get_state():
     """Get current simulation state"""
     return jsonify({
         'fires': [{'x': f.position[0], 'y': f.position[1], 'intensity': f.intensity} for f in fires],
-        'units': [{'name': u.name, 'x': u.position[0], 'y': u.position[1], 'water': u.water} for u in units],
+        'units': [{'name': u.name, 'x': u.position[0], 'y': u.position[1], 'hp': u.hp, 'max_hp': u.max_hp, 'water': u.water, 'max_water': u.max_water} for u in units],
         'grid_size': GRID_SIZE
     })
 
@@ -99,7 +99,7 @@ def step_simulation():
     
     return jsonify({
         'fires': [{'x': f.position[0], 'y': f.position[1], 'intensity': f.intensity} for f in fires],
-        'units': [{'name': u.name, 'x': u.position[0], 'y': u.position[1], 'water': u.water} for u in units]
+        'units': [{'name': u.name, 'x': u.position[0], 'y': u.position[1], 'hp': u.hp, 'max_hp': u.max_hp, 'water': u.water, 'max_water': u.max_water} for u in units]
     })
 
 @app.route('/api/add_fire', methods=['POST'])

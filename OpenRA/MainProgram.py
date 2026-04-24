@@ -86,8 +86,10 @@ class Fire:
 
 
 class Unit:
-    def __init__(self, name, dmg, sight, water, speed, position=(0, 0)):
+    def __init__(self, name, hp, dmg, sight, water, speed, position=(0, 0)):
         self.name = name
+        self.hp = hp
+        self.max_hp = hp
         self.damage = dmg
         self.sight = sight
         self.max_water = water
@@ -159,7 +161,7 @@ class Unit:
 
 class FireFighter(Unit):
     def __init__(self, pos=(0, 0)):
-        super().__init__("FireFighter", 50, 2, float("inf"), 50, pos)
+        super().__init__("FireFighter", 1000, 50, 2, float("inf"), 50, pos)
 
     def choose_target(self, fires, friendly_units, reserved_targets):
         choices = [f for f in fires if f not in reserved_targets]
@@ -168,7 +170,7 @@ class FireFighter(Unit):
 
 class Truck(Unit):
     def __init__(self, pos=(0, 0)):
-        super().__init__("Truck", 200, 8, 20, 100, pos)
+        super().__init__("Truck", 1500, 200, 8, 20, 100, pos)
 
     def choose_target(self, fires, friendly_units, reserved_targets):
         # Prefer large fires but avoid overcrowding
@@ -181,7 +183,7 @@ class Truck(Unit):
 
 class Drone(Unit):
     def __init__(self, pos=(0, 0)):
-        super().__init__("Drone", 100, 16, 5, 200, pos)
+        super().__init__("Drone", 2000, 100, 16, 5, 200, pos)
 
     def scan_map(self, engine_callback=None):
         """
