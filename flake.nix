@@ -14,6 +14,7 @@
 			packages = [
 				(pkgs.python313.withPackages (python-pkgs: with python-pkgs; [
 					grpcio
+					grpcio-tools
 				]))
 			];
 		};
