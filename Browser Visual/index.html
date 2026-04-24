@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Fire AI Debugger</title>
+  <style>
+    body { background: #111; color: white; font-family: sans-serif; }
+    #grid { display: grid; margin-top: 10px; }
+    .cell { width: 12px; height: 12px; border: 1px solid #222; }
+    button { margin: 4px; padding: 6px; }
+  </style>
+</head>
+<body>
+
+<h2>🔥 Firefighting AI Debugger</h2>
+
+<button onclick="toggleRun()">Start / Pause</button>
+<button onclick="toggleInfluence()">Influence</button>
+<button onclick="toggleThreat()">Threat</button>
+<button onclick="addFire()">Add Fire</button>
+
+<div id="grid"></div>
+
+<script>
+const SIZE = 40;
+const grid = document.getElementById("grid");
+grid.style.gridTemplateColumns = `repeat(${SIZE}, 12px)`;
+
+// --- State ---
+let fires = [];
+let units = [];
+let running = false;
+let showInfluence = true;
+let showThreat = true;
+
+const criticalPoints = [{x:20,y:20}];
+
+// --- Helpers ---
+const rand = (a,b)=>Math.floor(Math.random()*(b-a))+a;
+const dist = (a,b)=>Math.abs(a.x-b.x)+Math.abs(a.y-b.y);
+
+// --- Entities ---
+class Fire {
+  constructor(x,y,i){this.x=x;this.y=y;this.intensity=i;}
+}
+
+class Unit {
+  constructor(name,x,y,dmg,sight){
+    this.name=name;
+    this.x=x; this.y=y;
+    this.dmg=dmg;
+    this.sight=sight;
+    this.target=null;
+  }
+
+  choose(fires){
+    return fires.reduce((a,b)=>dist(this,a)<dist(this,b)?a:b);
+  }
+
+  computeWeights(fires){
+    let w={};
+    for(let f of fires){
+      let cluster=0;
+      for(let o of fires){
+        let d=dist(f,o);
+        if(d<=3) cluster+=o.intensity/(d+1);
+      }
+      let threat=Math.min(...criticalPoints.map(p=>dist(f,p)));
+      let score=cluster-threat*0.5;
+      w[`${f.x},${f.y}`]=Math.max(0.1,1-score*0.001);
+    }
+    return w;
+  }
+
+  step(fires){
+    if(!fires.length) return;
+
+    if(!this.target || this.target.intensity<=0){
+      this.target=this.choose(fires);
+    }
+
+    if(dist(this,this.target)<=this.sight){
+      this.target.intensity-=this.dmg;
+    } else {
+      // simple movement (replace with A*)
+      if(this.target.x>this.x) this.x++;
+      else if(this.target.x<this.x) this.x--;
+
+      if(this.target.y>this.y) this.y++;
+      else if(this.target.y<this.y) this.y--;
+    }
+  }
+}
+
+// --- Init ---
+function init(){
+  fires = Array.from({length:6},()=>new Fire(rand(0,SIZE),rand(0,SIZE),rand(100,400)));
+
+  units = [
+    new Unit("F",0,0,50,2),
+    new Unit("T",10,10,200,8),
+    new Unit("D",30,30,100,16)
+  ];
+
+  draw();
+}
+
+// --- Controls ---
+function toggleRun(){ running=!running; }
+function toggleInfluence(){ showInfluence=!showInfluence; }
+function toggleThreat(){ showThreat=!showThreat; }
+
+function addFire(){
+  fires.push(new Fire(rand(0,SIZE),rand(0,SIZE),rand(100,400)));
+}
+
+// --- Simulation loop ---
+function loop(){
+  if(running){
+    units.forEach(u=>u.step(fires));
+    fires = fires.filter(f=>f.intensity>0);
+  }
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// --- Draw ---
+function draw(){
+  grid.innerHTML="";
+
+  let weights = units[0]?.computeWeights(fires) || {};
+
+  for(let y=0;y<SIZE;y++){
+    for(let x=0;x<SIZE;x++){
+
+      let cell = document.createElement("div");
+      cell.className="cell";
+
+      let fire = fires.find(f=>f.x===x && f.y===y);
+      let unit = units.find(u=>u.x===x && u.y===y);
+
+      let bg="#111";
+
+      if(showInfluence){
+        let w = weights[`${x},${y}`];
+        if(w) bg = `rgba(255,165,0,${1-w})`;
+      }
+
+      if(fire) bg="red";
+      if(unit) bg="cyan";
+
+      if(showThreat && criticalPoints.some(p=>p.x===x && p.y===y)){
+        bg="purple";
+      }
+
+      cell.style.background = bg;
+      grid.appendChild(cell);
+    }
+  }
+}
+
+// --- Start ---
+init();
+loop();
+
+</script>
+</body>
+</html>
