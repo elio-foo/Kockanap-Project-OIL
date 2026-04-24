@@ -10,11 +10,13 @@ from typing import Dict
 from Entity import *
 from Message import *
 from Parser import parse_units
+from UnitLogic import UnitLogicContext, UnitLogicDispatcher
 
 TEAM_NAME = "ObudaInnovationLab"
 COMMAND_HELP = (
     "Commands:\n"
     "  move <unit_id> <up|down|left|right>\n"
+    "  logic [unit_id|all]\n"
     "  list\n"
     "  nop\n"
     "  quit"
@@ -61,6 +63,41 @@ def print_units(units_by_id: Dict[int, Unit]):
         print(units_by_id[unit_id])
 
 
+async def run_unit_logic(
+    dispatcher: UnitLogicDispatcher,
+    units_by_id: Dict[int, Unit],
+    queue_command_for_unit,
+    queue_move_for_unit,
+    target_unit_id: int | None = None,
+):
+    if not units_by_id:
+        print("No units tracked yet.")
+        return
+
+    context = UnitLogicContext(
+        units_by_id=units_by_id,
+        queue_command=queue_command_for_unit,
+        queue_move=queue_move_for_unit,
+    )
+
+    if target_unit_id is not None:
+        unit = units_by_id.get(target_unit_id)
+        if unit is None:
+            print(f"Unit {target_unit_id} is not tracked yet.")
+            return
+
+        handled = await dispatcher.run_for_unit(unit, context)
+        if not handled:
+            print(f"No unit logic registered for unit {target_unit_id}.")
+            return
+
+        print(f"Ran logic for unit {target_unit_id} ({unit.type}).")
+        return
+
+    handled_count = await dispatcher.run_for_units(units_by_id.values(), context)
+    print(f"Ran logic for {handled_count} tracked unit(s).")
+
+
 def handle_incoming(msg: CommandMessage, units_by_id: Dict[int, Unit]):
     if msg.operation == OperationId.ACK:
         print(f"ACKNOWLEDGED command #{msg.counter} for unit {msg.unitId}")
@@ -92,6 +129,13 @@ def handle_incoming(msg: CommandMessage, units_by_id: Dict[int, Unit]):
 
 async def command_loop(send_queue, units_by_id: Dict[int, Unit], command_counter):
     print(COMMAND_HELP)
+    logic_dispatcher = UnitLogicDispatcher()
+
+    async def queue_command_for_unit(unit_id: int, operation: OperationId, extra_json=None):
+        await queue_command(send_queue, command_counter, unit_id, operation, extra_json)
+
+    async def queue_move_for_unit(unit_id: int, direction: str):
+        await queue_move_command(send_queue, command_counter, unit_id, direction)
 
     while True:
         try:
@@ -121,6 +165,28 @@ async def command_loop(send_queue, units_by_id: Dict[int, Unit], command_counter
 
         if command_name == "nop":
             await queue_command(send_queue, command_counter, 0, OperationId.NOP)
+            continue
+
+        if command_name == "logic":
+            if len(parts) > 2:
+                print("Usage: logic [unit_id|all]")
+                continue
+
+            target_unit_id = None
+            if len(parts) == 2 and parts[1].lower() != "all":
+                try:
+                    target_unit_id = int(parts[1])
+                except ValueError:
+                    print("Usage: logic [unit_id|all]")
+                    continue
+
+            await run_unit_logic(
+                logic_dispatcher,
+                units_by_id,
+                queue_command_for_unit,
+                queue_move_for_unit,
+                target_unit_id,
+            )
             continue
 
         if command_name == "move":
