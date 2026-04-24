@@ -10,10 +10,12 @@ from typing import Dict
 from Entity import *
 from Message import *
 from Parser import parse_units
-from UnitLogic import UnitLogicContext, UnitLogicDispatcher
+from UnitLogic import MapTracker, UnitLogicContext, UnitLogicDispatcher
 
 TEAM_NAME = "ObudaInnovationLab"
+AUTO_LOGIC_INTERVAL_SECONDS = 1.0
 COMMAND_HELP = (
+    f"Auto logic: enabled for all controlled units every {AUTO_LOGIC_INTERVAL_SECONDS:.1f}s\n"
     "Commands:\n"
     "  move <unit_id> <up|down|left|right>\n"
     "  logic [unit_id|all]\n"
@@ -63,42 +65,77 @@ def print_units(units_by_id: Dict[int, Unit]):
         print(units_by_id[unit_id])
 
 
+def get_controlled_unit(units_by_id: Dict[int, Unit], unit_id: int) -> Unit | None:
+    unit = units_by_id.get(unit_id)
+    if unit is None:
+        return None
+
+    if unit.owner != TEAM_NAME:
+        return None
+
+    return unit
+
+
+def get_controlled_units(units_by_id: Dict[int, Unit]) -> list[Unit]:
+    return [unit for unit in units_by_id.values() if unit.owner == TEAM_NAME]
+
+
 async def run_unit_logic(
     dispatcher: UnitLogicDispatcher,
     units_by_id: Dict[int, Unit],
+    map_tracker: MapTracker,
     queue_command_for_unit,
     queue_move_for_unit,
     target_unit_id: int | None = None,
+    announce_result: bool = True,
 ):
     if not units_by_id:
-        print("No units tracked yet.")
+        if announce_result:
+            print("No units tracked yet.")
         return
 
     context = UnitLogicContext(
         units_by_id=units_by_id,
         queue_command=queue_command_for_unit,
         queue_move=queue_move_for_unit,
+        map_tracker=map_tracker,
     )
 
     if target_unit_id is not None:
-        unit = units_by_id.get(target_unit_id)
+        unit = get_controlled_unit(units_by_id, target_unit_id)
         if unit is None:
-            print(f"Unit {target_unit_id} is not tracked yet.")
+            tracked_unit = units_by_id.get(target_unit_id)
+            if tracked_unit is None and announce_result:
+                print(f"Unit {target_unit_id} is not tracked yet.")
+            elif tracked_unit is not None and announce_result:
+                print(
+                    f"Unit {target_unit_id} is tracked but owned by {tracked_unit.owner}, "
+                    "so logic will not run for it."
+                )
             return
 
         handled = await dispatcher.run_for_unit(unit, context)
         if not handled:
-            print(f"No unit logic registered for unit {target_unit_id}.")
+            if announce_result:
+                print(f"No unit logic registered for unit {target_unit_id}.")
             return
 
-        print(f"Ran logic for unit {target_unit_id} ({unit.type}).")
+        if announce_result:
+            print(f"Ran logic for unit {target_unit_id} ({unit.type}).")
         return
 
-    handled_count = await dispatcher.run_for_units(units_by_id.values(), context)
-    print(f"Ran logic for {handled_count} tracked unit(s).")
+    controlled_units = get_controlled_units(units_by_id)
+    if not controlled_units:
+        if announce_result:
+            print(f"No controlled units for team {TEAM_NAME} are tracked yet.")
+        return
+
+    handled_count = await dispatcher.run_for_units(controlled_units, context)
+    if announce_result:
+        print(f"Ran logic for {handled_count} controlled unit(s).")
 
 
-def handle_incoming(msg: CommandMessage, units_by_id: Dict[int, Unit]):
+def handle_incoming(msg: CommandMessage, units_by_id: Dict[int, Unit], map_tracker: MapTracker):
     if msg.operation == OperationId.ACK:
         print(f"ACKNOWLEDGED command #{msg.counter} for unit {msg.unitId}")
     elif msg.operation == OperationId.SERVER_UNITS:
@@ -115,6 +152,8 @@ def handle_incoming(msg: CommandMessage, units_by_id: Dict[int, Unit]):
                 continue
             units_by_id[unit.id] = unit
 
+        map_tracker.update_from_units(units_by_id)
+
         current_count = len(units_by_id)
         if previous_count == 0 and current_count > 0:
             print(f"Initial unit sync complete. Tracking {current_count} units.")
@@ -127,15 +166,42 @@ def handle_incoming(msg: CommandMessage, units_by_id: Dict[int, Unit]):
         )
 
 
-async def command_loop(send_queue, units_by_id: Dict[int, Unit], command_counter):
+async def auto_logic_loop(
+    dispatcher: UnitLogicDispatcher,
+    logic_lock: asyncio.Lock,
+    units_by_id: Dict[int, Unit],
+    map_tracker: MapTracker,
+    queue_command_for_unit,
+    queue_move_for_unit,
+):
+    while True:
+        await asyncio.sleep(AUTO_LOGIC_INTERVAL_SECONDS)
+
+        if not units_by_id:
+            continue
+
+        async with logic_lock:
+            await run_unit_logic(
+                dispatcher,
+                units_by_id,
+                map_tracker,
+                queue_command_for_unit,
+                queue_move_for_unit,
+                announce_result=False,
+            )
+
+
+async def command_loop(
+    send_queue,
+    units_by_id: Dict[int, Unit],
+    map_tracker: MapTracker,
+    command_counter,
+    logic_dispatcher: UnitLogicDispatcher,
+    logic_lock: asyncio.Lock,
+    queue_command_for_unit,
+    queue_move_for_unit,
+):
     print(COMMAND_HELP)
-    logic_dispatcher = UnitLogicDispatcher()
-
-    async def queue_command_for_unit(unit_id: int, operation: OperationId, extra_json=None):
-        await queue_command(send_queue, command_counter, unit_id, operation, extra_json)
-
-    async def queue_move_for_unit(unit_id: int, direction: str):
-        await queue_move_command(send_queue, command_counter, unit_id, direction)
 
     while True:
         try:
@@ -180,13 +246,15 @@ async def command_loop(send_queue, units_by_id: Dict[int, Unit], command_counter
                     print("Usage: logic [unit_id|all]")
                     continue
 
-            await run_unit_logic(
-                logic_dispatcher,
-                units_by_id,
-                queue_command_for_unit,
-                queue_move_for_unit,
-                target_unit_id,
-            )
+            async with logic_lock:
+                await run_unit_logic(
+                    logic_dispatcher,
+                    units_by_id,
+                    map_tracker,
+                    queue_command_for_unit,
+                    queue_move_for_unit,
+                    target_unit_id,
+                )
             continue
 
         if command_name == "move":
@@ -197,8 +265,22 @@ async def command_loop(send_queue, units_by_id: Dict[int, Unit], command_counter
             try:
                 unit_id = int(parts[1])
                 direction = parts[2]
-                if unit_id not in units_by_id:
-                    print(f"Unit {unit_id} is not tracked yet, sending the move anyway.")
+                unit = get_controlled_unit(units_by_id, unit_id)
+                if unit is None:
+                    tracked_unit = units_by_id.get(unit_id)
+                    if tracked_unit is None:
+                        print(f"Unit {unit_id} is not tracked yet. Use `list` after the next sync.")
+                    else:
+                        print(
+                            f"Unit {unit_id} belongs to {tracked_unit.owner}, not {TEAM_NAME}. "
+                            "Skipping the move to avoid steering the wrong unit."
+                        )
+                    continue
+
+                print(
+                    f"Sending move {direction} to unit {unit_id} "
+                    f"({unit.type}, owner={unit.owner}, position={unit.position})."
+                )
                 await queue_move_command(send_queue, command_counter, unit_id, direction)
             except ValueError as exc:
                 print(exc)
@@ -221,16 +303,25 @@ async def run():
 
         send_queue = asyncio.Queue(maxsize=10)
         units_by_id: Dict[int, Unit] = {}
+        map_tracker = MapTracker("map.txt")
         command_counter = count()
+        logic_dispatcher = UnitLogicDispatcher()
+        logic_lock = asyncio.Lock()
 
         call = stub.CommunicateWithStreams(
             request_generator(send_queue)
         )
 
+        async def queue_command_for_unit(unit_id: int, operation: OperationId, extra_json=None):
+            await queue_command(send_queue, command_counter, unit_id, operation, extra_json)
+
+        async def queue_move_for_unit(unit_id: int, direction: str):
+            await queue_move_command(send_queue, command_counter, unit_id, direction)
+
         async def receiver():
             try:
                 async for response in call:
-                    handle_incoming(CommandMessage(response), units_by_id)
+                    handle_incoming(CommandMessage(response), units_by_id, map_tracker)
             except asyncio.CancelledError:
                 raise
             except grpc.aio.AioRpcError as e:
@@ -238,15 +329,40 @@ async def run():
                     print("ERROR: ", e)
 
         receiver_task = asyncio.create_task(receiver())
+        auto_logic_task = asyncio.create_task(
+            auto_logic_loop(
+                logic_dispatcher,
+                logic_lock,
+                units_by_id,
+                map_tracker,
+                queue_command_for_unit,
+                queue_move_for_unit,
+            )
+        )
 
         try:
-            await command_loop(send_queue, units_by_id, command_counter)
+            await command_loop(
+                send_queue,
+                units_by_id,
+                map_tracker,
+                command_counter,
+                logic_dispatcher,
+                logic_lock,
+                queue_command_for_unit,
+                queue_move_for_unit,
+            )
         finally:
             call.cancel()
             receiver_task.cancel()
+            auto_logic_task.cancel()
 
             try:
                 await receiver_task
+            except asyncio.CancelledError:
+                pass
+
+            try:
+                await auto_logic_task
             except asyncio.CancelledError:
                 pass
 
