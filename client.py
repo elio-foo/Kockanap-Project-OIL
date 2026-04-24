@@ -6,6 +6,7 @@ import time
 import asyncio
 import json
 
+
 class Response():
     pass
 
@@ -40,10 +41,11 @@ def run_stream():
 
         responses = stub.CommunicateWithStreams(message_generator())
 
-        for resp in responses:
-            # print("Recieved: ", resp)
-            data = json.loads(resp.extraJson)
-            print(json.dumps(data, indent=2))
+        # for resp in responses:
+        #     json_resp = json.loads(resp.extraJson)
+        #     for unit in json_resp:
+                
+
 
 
 if __name__ == "__main__":
