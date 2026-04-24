@@ -7,6 +7,9 @@
     #grid { display: grid; margin-top: 10px; }
     .cell { width: 12px; height: 12px; border: 1px solid #222; }
     button { margin: 4px; padding: 6px; }
+    .unit-F { color: #00ff88; }
+    .unit-T { color: #00aaff; }
+    .unit-D { color: #ff00ff; }
   </style>
 </head>
 <body>
@@ -17,11 +20,13 @@
 <button onclick="toggleInfluence()">Influence</button>
 <button onclick="toggleThreat()">Threat</button>
 <button onclick="addFire()">Add Fire</button>
+<span id="status" style="margin-left: 20px; color: #888;">Connected to Flask API</span>
 
 <div id="grid"></div>
 
 <script>
 const SIZE = 40;
+const API_URL = 'http://localhost:5000/api';
 const grid = document.getElementById("grid");
 grid.style.gridTemplateColumns = `repeat(${SIZE}, 12px)`;
 
@@ -37,6 +42,41 @@ const criticalPoints = [{x:20,y:20}];
 // --- Helpers ---
 const rand = (a,b)=>Math.floor(Math.random()*(b-a))+a;
 const dist = (a,b)=>Math.abs(a.x-b.x)+Math.abs(a.y-b.y);
+
+// --- API Functions ---
+async function fetchState() {
+  try {
+    const res = await fetch(`${API_URL}/state`);
+    const data = await res.json();
+    fires = data.fires;
+    units = data.units;
+    draw();
+  } catch(e) {
+    document.getElementById('status').textContent = '⚠️ Flask not connected';
+    document.getElementById('status').style.color = 'orange';
+  }
+}
+
+async function stepSimulation() {
+  try {
+    const res = await fetch(`${API_URL}/step`, {method: 'POST'});
+    const data = await res.json();
+    fires = data.fires;
+    units = data.units;
+    draw();
+  } catch(e) {
+    console.error('Step error:', e);
+  }
+}
+
+async function addFireAPI() {
+  try {
+    await fetch(`${API_URL}/add_fire`, {method: 'POST'});
+    fetchState();
+  } catch(e) {
+    console.error('Add fire error:', e);
+  }
+}
 
 // --- Entities ---
 class Fire {
@@ -78,7 +118,8 @@ class Unit {
       this.target=this.choose(fires);
     }
 
-    if(dist(this,this.target)<=this.sight){
+    // Extinguish from 2 blocks away (not within sight range)
+    if(dist(this,this.target)<=2){
       this.target.intensity-=this.dmg;
     } else {
       // simple movement (replace with A*)
@@ -92,42 +133,33 @@ class Unit {
 }
 
 // --- Init ---
-function init(){
-  fires = Array.from({length:6},()=>new Fire(rand(0,SIZE),rand(0,SIZE),rand(100,400)));
-
-  units = [
-    new Unit("F",0,0,50,2),
-    new Unit("T",10,10,200,8),
-    new Unit("D",30,30,100,16)
-  ];
-
-  draw();
+async function init(){
+  await fetchState();
 }
 
 // --- Controls ---
 function toggleRun(){ running=!running; }
-function toggleInfluence(){ showInfluence=!showInfluence; }
-function toggleThreat(){ showThreat=!showThreat; }
+function toggleInfluence(){ showInfluence=!showInfluence; draw(); }
+function toggleThreat(){ showThreat=!showThreat; draw(); }
 
 function addFire(){
-  fires.push(new Fire(rand(0,SIZE),rand(0,SIZE),rand(100,400)));
+  addFireAPI();
 }
 
 // --- Simulation loop ---
 function loop(){
   if(running){
-    units.forEach(u=>u.step(fires));
-    fires = fires.filter(f=>f.intensity>0);
+    stepSimulation();
   }
-  draw();
-  requestAnimationFrame(loop);
+  // Note: draw() is called in fetchState/stepSimulation
+  setTimeout(loop, 200); // 5 steps per second
 }
 
 // --- Draw ---
 function draw(){
   grid.innerHTML="";
 
-  let weights = units[0]?.computeWeights(fires) || {};
+  let weights = units[0]?.computeWeights?.(fires) || {};
 
   for(let y=0;y<SIZE;y++){
     for(let x=0;x<SIZE;x++){
@@ -146,7 +178,14 @@ function draw(){
       }
 
       if(fire) bg="red";
-      if(unit) bg="cyan";
+      
+      // Different colors for different units
+      if(unit){
+        if(unit.name === 'FireFighter' || unit.name === 'F') bg="#00ff88"; // Green
+        else if(unit.name === 'Truck' || unit.name === 'T') bg="#00aaff"; // Blue
+        else if(unit.name === 'Drone' || unit.name === 'D') bg="#ff00ff"; // Magenta
+        else bg="cyan";
+      }
 
       if(showThreat && criticalPoints.some(p=>p.x===x && p.y===y)){
         bg="purple";
