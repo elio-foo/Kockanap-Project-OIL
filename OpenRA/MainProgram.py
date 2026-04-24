@@ -85,124 +85,124 @@ class Fire:
 # ============================================================
 
 
-# class Unit:
-#     def __init__(self, name, dmg, sight, water, speed, position=(0, 0)):
-#         self.name = name
-#         self.damage = dmg
-#         self.sight = sight
-#         self.max_water = water
-#         self.water = water
-#         self.speed = speed
-#         self.position = position
+class Unit:
+    def __init__(self, name, dmg, sight, water, speed, position=(0, 0)):
+        self.name = name
+        self.damage = dmg
+        self.sight = sight
+        self.max_water = water
+        self.water = water
+        self.speed = speed
+        self.position = position
 
-#         self.path: List[Tuple[int, int]] = []
-#         self.target: Optional[Fire] = None
+        self.path: List[Tuple[int, int]] = []
+        self.target: Optional[Fire] = None
 
-#     def distance(self, a, b):
-#         return abs(a[0] - b[0]) + abs(a[1] - b[1])
+    def distance(self, a, b):
+        return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
-#     # -----------------------------
-#     # CLUSTER + PREDICTION
-#     # -----------------------------
+    # -----------------------------
+    # CLUSTER + PREDICTION
+    # -----------------------------
 
-#     def compute_weighted_nodes(self, fires: List[Fire]):
-#         weights = {}
+    def compute_weighted_nodes(self, fires: List[Fire]):
+        weights = {}
 
-#         for f in fires:
-#             cluster_strength = 0
+        for f in fires:
+            cluster_strength = 0
 
-#             for other in fires:
-#                 d = self.distance(f.position, other.position)
-#                 if d <= 3:
-#                     cluster_strength += other.intensity / (d + 1)
+            for other in fires:
+                d = self.distance(f.position, other.position)
+                if d <= 3:
+                    cluster_strength += other.intensity / (d + 1)
 
-#             # Predictive growth factor (simple heuristic)
-#             predicted = f.intensity * 0.1
+            # Predictive growth factor (simple heuristic)
+            predicted = f.intensity * 0.1
 
-#             weights[f.position] = max(0.1, 1 - (cluster_strength + predicted) * 0.001)
+            weights[f.position] = max(0.1, 1 - (cluster_strength + predicted) * 0.001)
 
-#         return weights
+        return weights
 
-#     # -----------------------------
-#     # MOVEMENT
-#     # -----------------------------
+    # -----------------------------
+    # MOVEMENT
+    # -----------------------------
 
-#     def move(self):
-#         for _ in range(max(1, self.speed // 50)):  # speed scaling
-#             if self.path:
-#                 self.position = self.path.pop(0)
+    def move(self):
+        for _ in range(max(1, self.speed // 50)):  # speed scaling
+            if self.path:
+                self.position = self.path.pop(0)
 
-#     # -----------------------------
-#     # FIRE INTERACTION
-#     # -----------------------------
+    # -----------------------------
+    # FIRE INTERACTION
+    # -----------------------------
 
-#     def fight_fire(self, fire: Fire):
-#         if self.water == 0:
-#             return
+    def fight_fire(self, fire: Fire):
+        if self.water == 0:
+            return
 
-#         fire.intensity -= self.damage
+        fire.intensity -= self.damage
 
-#         if self.max_water != float("inf"):
-#             self.water -= 1
+        if self.max_water != float("inf"):
+            self.water -= 1
 
-#     def needs_refill(self):
-#         return self.water != float("inf") and self.water <= 2
+    def needs_refill(self):
+        return self.water != float("inf") and self.water <= 2
 
-#     def choose_target(self, fires, friendly_units, reserved_targets):
-#         raise NotImplementedError
-
-
-# # ============================================================
-# # UNITS
-# # ============================================================
+    def choose_target(self, fires, friendly_units, reserved_targets):
+        raise NotImplementedError
 
 
-# class FireFighter(Unit):
-#     def __init__(self, pos=(0, 0)):
-#         super().__init__("FireFighter", 50, 2, float("inf"), 50, pos)
-
-#     def choose_target(self, fires, friendly_units, reserved_targets):
-#         choices = [f for f in fires if f not in reserved_targets]
-#         return min(choices or fires, key=lambda f: self.distance(self.position, f.position))
+# ============================================================
+# UNITS
+# ============================================================
 
 
-# class Truck(Unit):
-#     def __init__(self, pos=(0, 0)):
-#         super().__init__("Truck", 200, 8, 20, 100, pos)
+class FireFighter(Unit):
+    def __init__(self, pos=(0, 0)):
+        super().__init__("FireFighter", 50, 2, float("inf"), 50, pos)
 
-#     def choose_target(self, fires, friendly_units, reserved_targets):
-#         # Prefer large fires but avoid overcrowding
-#         choices = sorted(fires, key=lambda f: f.intensity, reverse=True)
-#         for f in choices:
-#             if f not in reserved_targets:
-#                 return f
-#         return choices[0]
+    def choose_target(self, fires, friendly_units, reserved_targets):
+        choices = [f for f in fires if f not in reserved_targets]
+        return min(choices or fires, key=lambda f: self.distance(self.position, f.position))
 
 
-# class Drone(Unit):
-#     def __init__(self, pos=(0, 0)):
-#         super().__init__("Drone", 100, 16, 5, 200, pos)
+class Truck(Unit):
+    def __init__(self, pos=(0, 0)):
+        super().__init__("Truck", 200, 8, 20, 100, pos)
 
-#     def scan_map(self, engine_callback=None):
-#         """
-#         Optional full-map scan (OpenRA-style).
-#         engine_callback: function that returns updated fire list
-#         """
-#         if engine_callback:
-#             return engine_callback()
-#         return None
+    def choose_target(self, fires, friendly_units, reserved_targets):
+        # Prefer large fires but avoid overcrowding
+        choices = sorted(fires, key=lambda f: f.intensity, reverse=True)
+        for f in choices:
+            if f not in reserved_targets:
+                return f
+        return choices[0]
 
-#     def choose_target(self, fires, friendly_units, reserved_targets):
-#         def isolation_score(fire):
-#             closest = min(
-#                 self.distance(fire.position, u.position)
-#                 for u in friendly_units
-#                 if u != self
-#             )
-#             return closest
 
-#         choices = [f for f in fires if f not in reserved_targets]
-#         return max(choices or fires, key=isolation_score)
+class Drone(Unit):
+    def __init__(self, pos=(0, 0)):
+        super().__init__("Drone", 100, 16, 5, 200, pos)
+
+    def scan_map(self, engine_callback=None):
+        """
+        Optional full-map scan (OpenRA-style).
+        engine_callback: function that returns updated fire list
+        """
+        if engine_callback:
+            return engine_callback()
+        return None
+
+    def choose_target(self, fires, friendly_units, reserved_targets):
+        def isolation_score(fire):
+            closest = min(
+                self.distance(fire.position, u.position)
+                for u in friendly_units
+                if u != self
+            )
+            return closest
+
+        choices = [f for f in fires if f not in reserved_targets]
+        return max(choices or fires, key=isolation_score)
 
 
 # ============================================================
