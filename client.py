@@ -13,7 +13,7 @@ from Parser import parse_units
 from UnitLogic import MapTracker, UnitLogicContext, UnitLogicDispatcher
 
 TEAM_NAME = "ObudaInnovationLab"
-AUTO_LOGIC_INTERVAL_SECONDS = 1.0
+AUTO_LOGIC_INTERVAL_SECONDS = 100000.0
 COMMAND_HELP = (
     f"Auto logic: enabled for all controlled units every {AUTO_LOGIC_INTERVAL_SECONDS:.1f}s\n"
     "Commands:\n"

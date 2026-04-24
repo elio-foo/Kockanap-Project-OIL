@@ -41,25 +41,18 @@ class FirecopterLogic(BaseUnitLogic):
         if unit.id is None or unit.position is None:
             return
 
-        target_fire = self._find_nearest_active_fire(unit, context)
-        if target_fire is not None:
-            self._reset_roam_progress(unit)
-
-            if self._is_on_fire_tile(unit.position, target_fire.position):
-                await context.queue_command(unit.id, OperationId.EXTINGUISH)
-                return
-
-            direction = self._direction_towards(unit.position, target_fire.position)
-            if direction is not None:
-                # The copter ignores fire as blocked terrain and flies straight to the target tile.
-                await context.queue_move(unit.id, direction)
-            return
-
         roam_direction = self._next_roam_direction(unit)
-        if roam_direction is None:
+        if roam_direction is not None:
+            await context.queue_move(unit.id, roam_direction)
             return
 
-        await context.queue_move(unit.id, roam_direction)
+        target_fire = self._find_nearest_active_fire(unit, context)
+        if target_fire is None:
+            return
+
+        if self._is_on_fire_tile(unit.position, target_fire.position):
+            # Extinguish only as a fallback so visible fires do not interrupt scouting.
+            await context.queue_command(unit.id, OperationId.EXTINGUISH)
 
     def _find_nearest_active_fire(
         self,
@@ -99,6 +92,7 @@ class FirecopterLogic(BaseUnitLogic):
             return None
 
         state = self._get_or_create_roam_state(unit)
+        state["shift_stride"] = max(1, unit.sightTiles * 2)
         current_position = (unit.position.x, unit.position.y)
         self._apply_roam_feedback(state, current_position)
 
@@ -129,28 +123,18 @@ class FirecopterLogic(BaseUnitLogic):
             "phase": "sweep",
             "sweep_direction": "right",
             "vertical_direction": "down",
+            "shift_stride": max(1, unit.sightTiles * 2),
+            "shift_remaining": 0,
             "blocked_cells": set(),
         }
         self._roam_state_by_unit[unit.id] = state
         return state
 
-    def _reset_roam_progress(self, unit: Unit) -> None:
-        if unit.id is None:
-            return
-
-        state = self._roam_state_by_unit.get(unit.id)
-        if state is None:
-            return
-
-        if unit.position is not None:
-            state["last_position"] = (unit.position.x, unit.position.y)
-        state["last_attempted_target"] = None
-        state["last_attempted_direction"] = None
-
     def _apply_roam_feedback(self, state: dict[str, object], current_position: tuple[int, int]) -> None:
         last_position = state.get("last_position")
         last_attempted_target = state.get("last_attempted_target")
         phase = state.get("phase")
+        shift_remaining = state.get("shift_remaining", 0)
 
         if (
             isinstance(last_position, tuple)
@@ -160,13 +144,23 @@ class FirecopterLogic(BaseUnitLogic):
             self._mark_blocked(state, last_attempted_target)
             if phase == "sweep":
                 state["phase"] = "shift_row"
+                state["shift_remaining"] = state.get("shift_stride", 1)
             elif phase == "shift_row":
                 state["phase"] = "done"
+                state["shift_remaining"] = 0
         elif phase == "shift_row":
-            state["phase"] = "sweep"
-            state["sweep_direction"] = self._reverse_horizontal_direction(
-                state.get("sweep_direction")
-            )
+            if not isinstance(shift_remaining, int):
+                shift_remaining = 0
+
+            shift_remaining -= 1
+            if shift_remaining <= 0:
+                state["phase"] = "sweep"
+                state["shift_remaining"] = 0
+                state["sweep_direction"] = self._reverse_horizontal_direction(
+                    state.get("sweep_direction")
+                )
+            else:
+                state["shift_remaining"] = shift_remaining
 
         state["last_position"] = current_position
         state["last_attempted_target"] = None
@@ -195,15 +189,19 @@ class FirecopterLogic(BaseUnitLogic):
                 self._mark_blocked(state, target)
                 if phase == "sweep":
                     state["phase"] = "shift_row"
+                    state["shift_remaining"] = state.get("shift_stride", 1)
                     continue
                 state["phase"] = "done"
+                state["shift_remaining"] = 0
                 return None
 
             if target in blocked_cells:
                 if phase == "sweep":
                     state["phase"] = "shift_row"
+                    state["shift_remaining"] = state.get("shift_stride", 1)
                     continue
                 state["phase"] = "done"
+                state["shift_remaining"] = 0
                 return None
 
             return direction, target
@@ -242,26 +240,6 @@ class FirecopterLogic(BaseUnitLogic):
     @staticmethod
     def _is_on_fire_tile(unit_position: Position, fire_position: Position) -> bool:
         return unit_position.x == fire_position.x and unit_position.y == fire_position.y
-
-    @classmethod
-    def _direction_towards(cls, current: Position, target: Position) -> str | None:
-        return cls._direction_towards_tuple((current.x, current.y), (target.x, target.y))
-
-    @staticmethod
-    def _direction_towards_tuple(current: tuple[int, int], target: tuple[int, int]) -> str | None:
-        current_x, current_y = current
-        target_x, target_y = target
-        dx = target_x - current_x
-        dy = target_y - current_y
-
-        if dx != 0:
-            return "right" if dx > 0 else "left"
-
-        if dy != 0:
-            return "down" if dy > 0 else "up"
-
-        return None
-
 
 DEFAULT_UNIT_LOGIC_BY_TYPE: dict[UnitType, BaseUnitLogic] = {
     UnitType.Firefighter: FirefighterLogic(),

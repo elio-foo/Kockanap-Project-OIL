@@ -42,13 +42,20 @@ class MapTracker:
             for seen_water in unit.seenWaters:
                 current_water_positions.add((seen_water.x, seen_water.y))
 
+        remembered_fire_positions = self._remembered_fire_positions()
+        confirmed_cleared_fires = (
+            remembered_fire_positions & visible_cells
+        ) - current_fire_positions
+        remembered_fire_positions -= confirmed_cleared_fires
+        remembered_fire_positions |= current_fire_positions
+
         for coordinates in visible_cells:
             self._known_cells[coordinates] = self._EMPTY
 
         for coordinates in current_water_positions:
             self._known_cells[coordinates] = self._WATER
 
-        for coordinates in current_fire_positions:
+        for coordinates in remembered_fire_positions:
             self._known_cells[coordinates] = self._FIRE
 
         self._write_map(unit_overlays)
@@ -73,6 +80,13 @@ class MapTracker:
                 unknown_neighbors += 1
 
         return unknown_neighbors
+
+    def _remembered_fire_positions(self) -> set[tuple[int, int]]:
+        return {
+            coordinates
+            for coordinates, cell_type in self._known_cells.items()
+            if cell_type == self._FIRE
+        }
 
     def _visible_cells_for_unit(self, unit: Unit) -> set[tuple[int, int]]:
         if unit.position is None:

@@ -87,6 +87,33 @@ class Unit:
             hp=fire_data.get("HP", 0),
         )
 
+    @staticmethod
+    def _first_present(json_data, *keys):
+        for key in keys:
+            if key in json_data and json_data[key] is not None:
+                return json_data[key]
+        return None
+
+    @staticmethod
+    def _coerce_int(value, fallback: int) -> int:
+        if value is None:
+            return fallback
+
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return fallback
+
+    @staticmethod
+    def _coerce_number(value, fallback: int | float) -> int | float:
+        if value is None:
+            return fallback
+
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return fallback
+
     def from_json(self, json_data):
         self.id = json_data.get("Id")
         self.owner = json_data.get("Owner", "")
@@ -95,6 +122,34 @@ class Unit:
         self.position = self._parse_position(json_data.get("Position"))
         self.currentWaterLevel = json_data.get("CurrentWaterLevel", 0)
         self.currentHP = json_data.get("CurrentHP", 0)
+        self.damage = self._coerce_int(
+            self._first_present(json_data, "Damage", "damage"),
+            self.damage,
+        )
+        self.sightTiles = self._coerce_int(
+            self._first_present(
+                json_data,
+                "SightTiles",
+                "Sight",
+                "sightTiles",
+                "sight",
+            ),
+            self.sightTiles,
+        )
+        self.waterSupply = self._coerce_number(
+            self._first_present(
+                json_data,
+                "WaterSupply",
+                "MaxWaterLevel",
+                "waterSupply",
+                "maxWaterLevel",
+            ),
+            self.waterSupply,
+        )
+        self.speed = self._coerce_int(
+            self._first_present(json_data, "Speed", "speed"),
+            self.speed,
+        )
         self.seenFires = [
             self._parse_seen_fire(fire_data)
             for fire_data in json_data.get("SeenFires", [])
