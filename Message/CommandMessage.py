@@ -7,4 +7,5 @@ class CommandMessage:
         self.teamName = server_response.teamName
         self.counter = server_response.counter
         self.operation = OperationId(server_response.operation)
-        self.extraJson = json.loads(server_response.extraJson)
+        raw_extra_json = server_response.extraJson.strip()
+        self.extraJson = json.loads(raw_extra_json) if raw_extra_json else {}

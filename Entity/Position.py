@@ -7,4 +7,4 @@ class Position:
         self.y = y
 
     def __str__(self):
-        return "{", self.x, ", ", self.y, "}"
+        return f"{{{self.x}, {self.y}}}"

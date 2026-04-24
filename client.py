@@ -2,14 +2,12 @@ import grpc
 import greeter_pb2
 import greeter_pb2_grpc
 
-import time
 import asyncio
-import json
-
-from typing import List
+from typing import Dict
 
 from Entity import *
 from Message import *
+from Parser import parse_units
 
 async def request_generator(send_queue):
     while True:
@@ -21,13 +19,24 @@ async def request_generator(send_queue):
         yield msg
 
 
-def handle_incoming(msg: CommandMessage):
+def handle_incoming(msg: CommandMessage, units_by_id: Dict[int, Unit]):
     if msg.operation == OperationId.ACK:
         print("ACKNOWLEGED COMMAND")
     elif msg.operation == OperationId.SERVER_UNITS:
-        for unit in msg.extraJson:
-            u = Unit()
-            u.from_json(msg.extraJson)
+        try:
+            parsed_units = parse_units(msg.extraJson)
+        except ValueError as exc:
+            print(f"Could not parse server units: {exc}")
+            return
+
+        for unit in parsed_units:
+            if unit.id is None:
+                continue
+            units_by_id[unit.id] = unit
+
+        print(f"Tracked {len(units_by_id)} units")
+        for unit in parsed_units:
+            print(unit)
 
 
 async def run():
@@ -42,6 +51,7 @@ async def run():
         #    
 
         send_queue = asyncio.Queue(maxsize=10)
+        units_by_id: Dict[int, Unit] = {}
 
         call = stub.CommunicateWithStreams(
             request_generator(send_queue)
@@ -50,7 +60,7 @@ async def run():
         async def receiver():
             try:
                 async for response in call:
-                    handle_incoming(CommandMessage(response))
+                    handle_incoming(CommandMessage(response), units_by_id)
             except grpc.aio.AioRpcError as e:
                 print("ERROR: ", e)
         

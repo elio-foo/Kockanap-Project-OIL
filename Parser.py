@@ -1,15 +1,22 @@
-import json
-
-from Entity import *
+from Entity import Unit
 
 def parse_to_unit(unit_data) -> Unit:
-    unit = Unit()
+    return Unit().from_json(unit_data)
 
-    unit.id = unit_data.get("Id")
-    unit.type = UnitType(unit_data.get("UnitType"))
-    unit.owner = unit_data.get("Owner")
-    unit.position = Position(unit_data["Position"]["X"], unit_data["Position"]["Y"])
-    unit.currentHP = unit_data.get("CurrentHP")
-    unit.currentWaterLevel = unit_data.get("CurrentWaterLevel")
 
-    return unit
+def parse_units(payload) -> list[Unit]:
+    if payload is None:
+        return []
+
+    if isinstance(payload, list):
+        return [parse_to_unit(unit_data) for unit_data in payload]
+
+    if isinstance(payload, dict):
+        if "Id" in payload:
+            return [parse_to_unit(payload)]
+
+        list_values = [value for value in payload.values() if isinstance(value, list)]
+        if len(list_values) == 1:
+            return [parse_to_unit(unit_data) for unit_data in list_values[0]]
+
+    raise ValueError(f"Unsupported unit payload: {payload}")
