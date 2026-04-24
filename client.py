@@ -6,30 +6,31 @@ import time
 import asyncio
 import json
 
+from typing import List
+
+from Entity import *
 from Message import *
 
-async def message_generator():
-    for i in range(1):
-        msg = greeter_pb2.CommandMessage(
-            teamName = "ObudaInnovationLab",
-            counter = i + 1,
-            unitId = 43,
-            operation = "Left",
-            extraJson = "{}",
-        )
+async def request_generator(send_queue):
+    while True:
+        msg = await send_queue.get()
 
-        print("Sending: ", msg)
+        if msg is None:
+            break
 
         yield msg
-        await asyncio.sleep(1)
 
-def handle_server_message(message: CommandMessage):
-    print(message.teamName)
-    print(message.counter)
-    print(message.operation)
-    print(json.dumps(message.extraJson, indent=2))
-        
-async def run_stream():
+
+def handle_incoming(msg: CommandMessage):
+    if msg.operation == OperationId.ACK:
+        print("ACKNOWLEGED COMMAND")
+    elif msg.operation == OperationId.SERVER_UNITS:
+        for unit in msg.extraJson:
+            u = Unit()
+            u.from_json(msg.extraJson)
+
+
+async def run():
     async with grpc.aio.insecure_channel("10.4.4.59:5001") as channel:
         stub = greeter_pb2_grpc.FireRaServiceStub(channel)
 
@@ -38,11 +39,38 @@ async def run_stream():
         response = await stub.SayHello(request)
 
         print("Response:", response.message)
+        #    
 
-        responses = stub.CommunicateWithStreams(message_generator())
+        send_queue = asyncio.Queue(maxsize=10)
 
-        async for resp in responses:
-            handle_server_message(CommandMessage(resp))
+        call = stub.CommunicateWithStreams(
+            request_generator(send_queue)
+        )
+
+        async def receiver():
+            try:
+                async for response in call:
+                    handle_incoming(CommandMessage(response))
+            except grpc.aio.AioRpcError as e:
+                print("ERROR: ", e)
+        
+        async def sender():
+            counter = 0
+            while True:
+                msg = greeter_pb2.CommandMessage(
+                    teamName="ObudaInnovationLab",
+                    counter=counter,
+                    unitId=43,
+                    operation=OperationId.NOP.value,
+                    extraJson="{}"
+                )
+
+                await send_queue.put(msg)
+                counter += 1
+
+                await asyncio.sleep(1)
+        
+        await asyncio.gather(receiver(), sender())
 
 if __name__ == "__main__":
-    asyncio.run(run_stream())
+    asyncio.run(run())
