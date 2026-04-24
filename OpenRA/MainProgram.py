@@ -26,7 +26,7 @@ def heuristic(a: Tuple[int, int], b: Tuple[int, int]) -> int:
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
 
-def astar(start, goal, grid_size=(100, 100), weighted_nodes=None):
+def astar(start, goal, grid_size=(200, 200), weighted_nodes=None):
     if weighted_nodes is None:
         weighted_nodes = {}
 
