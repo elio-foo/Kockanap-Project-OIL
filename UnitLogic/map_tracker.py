@@ -109,6 +109,14 @@ class MapTracker:
             return False
         return True
 
+    def has_detected_full_bounds(self) -> bool:
+        return self._detected_right_border is not None and self._detected_bottom_border is not None
+
+    def detected_center(self) -> tuple[int, int] | None:
+        if not self.has_detected_full_bounds():
+            return None
+        return (self._detected_right_border // 2, self._detected_bottom_border // 2)
+
     def record_failed_move(
         self,
         current_position: tuple[int, int],
