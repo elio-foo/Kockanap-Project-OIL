@@ -130,6 +130,27 @@ class MapTracker:
         if unit.position is None:
             return set()
 
+        fallback_visible_cells = self._radius_visible_cells_for_unit(unit)
+        explicit_visible_cells = {
+            (tile.x, tile.y)
+            for tile in unit.visibleTiles
+            if tile.x >= 0 and tile.y >= 0
+        }
+
+        if not explicit_visible_cells:
+            return fallback_visible_cells
+
+        if len(explicit_visible_cells) >= len(fallback_visible_cells):
+            return explicit_visible_cells
+
+        # Some servers send sparse visibility hints instead of the full visible area.
+        # Keep those tiles, but do not let them punch holes in the expected sight radius.
+        return fallback_visible_cells | explicit_visible_cells
+
+    def _radius_visible_cells_for_unit(self, unit: Unit) -> set[tuple[int, int]]:
+        if unit.position is None:
+            return set()
+
         origin_x = unit.position.x
         origin_y = unit.position.y
         sight = max(0, unit.sightTiles)
