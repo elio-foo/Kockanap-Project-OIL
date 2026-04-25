@@ -1,6 +1,13 @@
+from dataclasses import dataclass
 from pathlib import Path
 
 from Entity import Unit
+
+
+@dataclass(slots=True)
+class FireMemory:
+    awaiting_revisit: bool = False
+    was_visible_last_update: bool = False
 
 
 class MapTracker:
@@ -17,6 +24,8 @@ class MapTracker:
     def __init__(self, map_path: str | Path = "map.txt") -> None:
         self.map_path = Path(map_path)
         self._known_cells: dict[tuple[int, int], str] = {}
+        self._fire_memory: dict[tuple[int, int], FireMemory] = {}
+        self._water_memory: set[tuple[int, int]] = set()
         self._write_map({})
 
     def update_from_units(self, units_by_id: dict[int, Unit]) -> None:
@@ -42,20 +51,17 @@ class MapTracker:
             for seen_water in unit.seenWaters:
                 current_water_positions.add((seen_water.x, seen_water.y))
 
-        remembered_fire_positions = self._remembered_fire_positions()
-        confirmed_cleared_fires = (
-            remembered_fire_positions & visible_cells
-        ) - current_fire_positions
-        remembered_fire_positions -= confirmed_cleared_fires
-        remembered_fire_positions |= current_fire_positions
-
         for coordinates in visible_cells:
             self._known_cells[coordinates] = self._EMPTY
 
-        for coordinates in current_water_positions:
+        self._water_memory.update(current_water_positions)
+
+        self._update_fire_memory(visible_cells, current_fire_positions)
+
+        for coordinates in self._water_memory:
             self._known_cells[coordinates] = self._WATER
 
-        for coordinates in remembered_fire_positions:
+        for coordinates in self._fire_memory:
             self._known_cells[coordinates] = self._FIRE
 
         self._write_map(unit_overlays)
@@ -81,12 +87,44 @@ class MapTracker:
 
         return unknown_neighbors
 
-    def _remembered_fire_positions(self) -> set[tuple[int, int]]:
-        return {
-            coordinates
-            for coordinates, cell_type in self._known_cells.items()
-            if cell_type == self._FIRE
-        }
+    def _update_fire_memory(
+        self,
+        visible_cells: set[tuple[int, int]],
+        current_fire_positions: set[tuple[int, int]],
+    ) -> None:
+        for coordinates in current_fire_positions:
+            fire_memory = self._fire_memory.get(coordinates)
+            if fire_memory is None:
+                fire_memory = FireMemory()
+                self._fire_memory[coordinates] = fire_memory
+
+            fire_memory.awaiting_revisit = False
+            fire_memory.was_visible_last_update = True
+
+        fire_positions_to_remove: list[tuple[int, int]] = []
+
+        for coordinates, fire_memory in self._fire_memory.items():
+            if coordinates in current_fire_positions:
+                continue
+
+            currently_visible = coordinates in visible_cells
+
+            if not currently_visible:
+                if fire_memory.was_visible_last_update:
+                    fire_memory.awaiting_revisit = True
+                fire_memory.was_visible_last_update = False
+                continue
+
+            if fire_memory.awaiting_revisit:
+                fire_positions_to_remove.append(coordinates)
+                continue
+
+            # Still in the same visibility session as when the fire was last remembered.
+            # Keep the fire on the map until the tile leaves vision and is later rechecked.
+            fire_memory.was_visible_last_update = True
+
+        for coordinates in fire_positions_to_remove:
+            self._fire_memory.pop(coordinates, None)
 
     def _visible_cells_for_unit(self, unit: Unit) -> set[tuple[int, int]]:
         if unit.position is None:
@@ -137,7 +175,7 @@ class MapTracker:
             row_cells: list[str] = []
             for x in range(min_x, max_x + 1):
                 coordinates = (x, y)
-                row_cells.append(unit_overlays.get(coordinates, self._known_cells.get(coordinates, self._UNKNOWN)))
+                row_cells.append(self._display_symbol(coordinates, unit_overlays))
 
             map_contents.append(f"{y:>4} {' '.join(row_cells)}")
 
@@ -145,6 +183,21 @@ class MapTracker:
 
     def _has_unknown_neighbor(self, coordinates: tuple[int, int]) -> bool:
         return any(neighbor not in self._known_cells for neighbor in self._neighbors_of(coordinates))
+
+    def _display_symbol(
+        self,
+        coordinates: tuple[int, int],
+        unit_overlays: dict[tuple[int, int], str],
+    ) -> str:
+        remembered_symbol = self._known_cells.get(coordinates, self._UNKNOWN)
+
+        if remembered_symbol == self._FIRE:
+            return self._FIRE
+
+        if remembered_symbol == self._WATER:
+            return self._WATER
+
+        return unit_overlays.get(coordinates, remembered_symbol)
 
     @staticmethod
     def _neighbors_of(coordinates: tuple[int, int]) -> tuple[tuple[int, int], ...]:
