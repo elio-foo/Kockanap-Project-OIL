@@ -491,6 +491,7 @@ class FiretruckLogic(BaseUnitLogic):
 class FirecopterLogic(BaseUnitLogic):
     _SCAN_START = (16, 16)
     _VERTICAL_SHIFT_OVERLAP_TILES = 2
+    _WATER_CELL = "W"
     _DIRECTION_VECTORS = {
         "right": (1, 0),
         "down": (0, 1),
@@ -550,6 +551,22 @@ class FirecopterLogic(BaseUnitLogic):
                     fires_by_position[key] = seen_fire
 
         return list(fires_by_position.values())
+
+    def _collect_water_cells(self, context: UnitLogicContext) -> set[tuple[int, int]]:
+        water_cells: set[tuple[int, int]] = set()
+
+        if context.map_tracker is not None:
+            water_cells.update(
+                coordinates
+                for coordinates, cell_type in context.map_tracker.get_known_cells().items()
+                if cell_type == self._WATER_CELL
+            )
+
+        for tracked_unit in context.units_by_id.values():
+            for seen_water in tracked_unit.seenWaters:
+                water_cells.add((seen_water.x, seen_water.y))
+
+        return water_cells
 
     def _next_roam_direction(self, unit: Unit, context: UnitLogicContext) -> str | None:
         if unit.id is None or unit.position is None:
