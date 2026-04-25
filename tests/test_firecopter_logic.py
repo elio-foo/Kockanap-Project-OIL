@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from Entity import Position, Unit, UnitType
+from Entity import Position, SeenFire, Unit, UnitType
 from UnitLogic.context import UnitLogicContext
 from UnitLogic.handlers import FirecopterLogic
 from UnitLogic.map_tracker import MapTracker
@@ -196,7 +196,7 @@ class FirecopterLogicTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(tracker.is_within_detected_bounds((1, 0)))
         self.assertEqual(moves[-1][1], "right")
 
-    async def test_repeated_logic_without_new_observation_does_not_detect_border(self) -> None:
+    async def test_repeated_logic_without_new_observation_reissues_same_move(self) -> None:
         moves: list[tuple[int, str]] = []
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
@@ -230,7 +230,48 @@ class FirecopterLogicTests(unittest.IsolatedAsyncioTestCase):
         await logic.run(unit, context)
 
         self.assertTrue(tracker.is_within_detected_bounds((1, 0)))
-        self.assertEqual(moves, [(1, "right")])
+        self.assertEqual(moves, [(1, "right"), (1, "right"), (1, "right")])
+
+    async def test_firecopter_does_not_switch_to_extinguish_while_waiting_for_roam_update(self) -> None:
+        moves: list[tuple[int, str]] = []
+        commands: list[tuple[int, object, object | None]] = []
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        tracker = MapTracker(Path(temp_dir.name) / "map.txt")
+        logic = FirecopterLogic()
+
+        async def queue_move(unit_id: int, direction: str) -> None:
+            moves.append((unit_id, direction))
+
+        async def queue_command(unit_id: int, operation, extra_json=None) -> None:
+            commands.append((unit_id, operation, extra_json))
+
+        unit = Unit(
+            unit_id=1,
+            owner="ObudaInnovationLab",
+            unit_type=UnitType.Firecopter,
+            position=Position(4, 4),
+            sight_tiles=16,
+            seen_fires=[SeenFire(position=Position(4, 4), hp=100)],
+        )
+
+        tracker.update_from_units({1: unit})
+        context = UnitLogicContext(
+            units_by_id={1: unit},
+            queue_command=queue_command,
+            queue_move=queue_move,
+            map_tracker=tracker,
+        )
+
+        state = logic._get_or_create_roam_state(unit)
+        state["last_position"] = (4, 4)
+        state["last_attempted_target"] = (5, 4)
+        state["last_attempted_observation_version"] = tracker.observation_version
+
+        await logic.run(unit, context)
+
+        self.assertEqual(moves, [])
+        self.assertEqual(commands, [])
 
     async def test_firecopter_detects_two_tile_loop_pattern(self) -> None:
         logic = FirecopterLogic()
@@ -428,6 +469,68 @@ class FirecopterLogicTests(unittest.IsolatedAsyncioTestCase):
         _, direction = moves[0]
         target = logic._apply_direction((4, 4), direction)
         self.assertIn(target, tracker.get_frontier_cells())
+
+    async def test_copter_frontier_hunt_prefers_nearby_frontier_over_returning_to_center(self) -> None:
+        logic = FirecopterLogic()
+        unit = Unit(
+            unit_id=1,
+            owner="ObudaInnovationLab",
+            unit_type=UnitType.Firecopter,
+            position=Position(7, 7),
+            sight_tiles=1,
+        )
+
+        class StubMapTracker:
+            def detected_center(self) -> tuple[int, int]:
+                return (4, 4)
+
+            def get_frontier_cells(self) -> set[tuple[int, int]]:
+                return {(8, 7)}
+
+            def count_unknown_neighbors(self, coordinates: tuple[int, int]) -> int:
+                _ = coordinates
+                return 2
+
+            def is_within_detected_bounds(self, coordinates: tuple[int, int]) -> bool:
+                return coordinates[0] >= 0 and coordinates[1] >= 0
+
+            def get_known_cells(self) -> dict[tuple[int, int], str]:
+                return {
+                    (7, 7): ".",
+                    (8, 7): ".",
+                }
+
+        tracker = StubMapTracker()
+        context = UnitLogicContext(
+            units_by_id={1: unit},
+            queue_command=lambda *args, **kwargs: None,
+            queue_move=lambda *args, **kwargs: None,
+            map_tracker=tracker,
+        )
+
+        state = logic._get_or_create_roam_state(unit)
+        state["phase"] = "frontier_hunt"
+        path_goals: list[tuple[int, int]] = []
+
+        def fake_find_copter_path(*, start, goal, water_cells, blocked_cells, map_tracker):
+            _ = (start, water_cells, blocked_cells, map_tracker)
+            path_goals.append(goal)
+            if goal == (8, 7):
+                return ["right"]
+            raise AssertionError("Frontier hunt should not fall back to the center when a frontier path exists")
+
+        logic._find_copter_path = fake_find_copter_path  # type: ignore[method-assign]
+
+        move_choice = logic._move_towards_frontier(
+            state,
+            (7, 7),
+            context,
+            set(),
+            unit,
+        )
+
+        self.assertEqual(path_goals, [(8, 7)])
+        self.assertEqual(move_choice, ("right", (8, 7)))
 
     async def test_multiple_copters_get_different_scan_start_biases(self) -> None:
         first_moves: list[tuple[int, str]] = []

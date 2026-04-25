@@ -821,48 +821,6 @@ class FirecopterLogic(BaseUnitLogic):
         roam_direction = self._next_roam_direction(unit, context)
         if roam_direction is not None:
             await context.queue_move(unit.id, roam_direction)
-            return
-
-        target_fire = self._find_nearest_active_fire(unit, context)
-        if target_fire is None:
-            return
-
-        if self._is_on_fire_tile(unit.position, target_fire.position):
-            # Extinguish only as a fallback so visible fires do not interrupt scouting.
-            await context.queue_command(unit.id, OperationId.EXTINGUISH)
-
-    def _find_nearest_active_fire(
-        self,
-        unit: Unit,
-        context: UnitLogicContext,
-    ) -> SeenFire | None:
-        active_fires = self._collect_active_fires(context)
-        if not active_fires or unit.position is None:
-            return None
-
-        return min(
-            active_fires,
-            key=lambda fire: (
-                self._distance(unit.position, fire.position),
-                -fire.hp,
-            ),
-        )
-
-    def _collect_active_fires(self, context: UnitLogicContext) -> list[SeenFire]:
-        fires_by_position: dict[tuple[int, int], SeenFire] = {}
-
-        for tracked_unit in context.units_by_id.values():
-            for seen_fire in tracked_unit.seenFires:
-                if seen_fire.hp <= 0:
-                    continue
-
-                key = (seen_fire.position.x, seen_fire.position.y)
-                existing_fire = fires_by_position.get(key)
-
-                if existing_fire is None or seen_fire.hp > existing_fire.hp:
-                    fires_by_position[key] = seen_fire
-
-        return list(fires_by_position.values())
 
     def _collect_water_cells(self, context: UnitLogicContext) -> set[tuple[int, int]]:
         water_cells: set[tuple[int, int]] = set()
@@ -1176,6 +1134,9 @@ class FirecopterLogic(BaseUnitLogic):
         observation_version = self._observation_version(context)
 
         if self._awaiting_fresh_observation(state, current_position, observation_version):
+            last_attempted_direction = state.get("last_attempted_direction")
+            if isinstance(last_attempted_direction, str):
+                return last_attempted_direction
             return None
 
         state["shift_stride"] = self._vertical_shift_stride(unit)
@@ -1342,24 +1303,15 @@ class FirecopterLogic(BaseUnitLogic):
             return None
 
         blocked_cells = state.get("blocked_cells")
+        visit_counts = state.get("visit_counts")
         if not isinstance(blocked_cells, set):
             return None
+        if not isinstance(visit_counts, dict):
+            visit_counts = {}
 
         center = map_tracker.detected_center()
         if center is None:
             return None
-
-        if current_position != center:
-            path = self._find_copter_path(
-                start=current_position,
-                goal=center,
-                water_cells=water_cells,
-                blocked_cells=blocked_cells,
-                map_tracker=map_tracker,
-            )
-            if path:
-                direction = path[0]
-                return direction, self._apply_direction(current_position, direction)
 
         frontier_cells = [
             coordinates
@@ -1372,12 +1324,14 @@ class FirecopterLogic(BaseUnitLogic):
                 blocked_cells=blocked_cells,
                 water_cells=water_cells,
                 context=context,
+                visit_counts=visit_counts,
             )
 
         anchor = self._frontier_anchor(unit, context, center)
         target = min(
             frontier_cells,
             key=lambda coordinates: (
+                visit_counts.get(coordinates, 0),
                 self._distance_tuple(anchor, coordinates),
                 self._distance_tuple(current_position, coordinates),
                 -map_tracker.count_unknown_neighbors(coordinates),
@@ -1397,11 +1351,24 @@ class FirecopterLogic(BaseUnitLogic):
             return direction, self._apply_direction(current_position, direction)
 
         blocked_cells.add(target)
+        if current_position != center:
+            path = self._find_copter_path(
+                start=current_position,
+                goal=center,
+                water_cells=water_cells,
+                blocked_cells=blocked_cells,
+                map_tracker=map_tracker,
+            )
+            if path:
+                direction = path[0]
+                return direction, self._apply_direction(current_position, direction)
+
         return self._best_local_unknown_move(
             current_position=current_position,
             blocked_cells=blocked_cells,
             water_cells=water_cells,
             context=context,
+            visit_counts=visit_counts,
         )
 
     def _best_local_unknown_move(
@@ -1411,8 +1378,10 @@ class FirecopterLogic(BaseUnitLogic):
         blocked_cells: set[tuple[int, int]],
         water_cells: set[tuple[int, int]],
         context: UnitLogicContext,
+        visit_counts: dict[tuple[int, int], int] | None = None,
     ) -> tuple[str, tuple[int, int]] | None:
         candidates: list[tuple[tuple[int, int, int], str, tuple[int, int]]] = []
+        visit_counts = visit_counts or {}
         for candidate_index, direction in enumerate(("right", "down", "left", "up")):
             target = self._apply_direction(current_position, direction)
             if target[0] < 0 or target[1] < 0:
@@ -1424,7 +1393,17 @@ class FirecopterLogic(BaseUnitLogic):
             unknown_score = 0
             if context.map_tracker is not None:
                 unknown_score = -context.map_tracker.count_unknown_neighbors(target)
-            candidates.append(((unknown_score, candidate_index, self._distance_tuple(current_position, target)), direction, target))
+            candidates.append(
+                (
+                    (
+                        visit_counts.get(target, 0),
+                        unknown_score,
+                        candidate_index,
+                    ),
+                    direction,
+                    target,
+                )
+            )
 
         if not candidates:
             return None
