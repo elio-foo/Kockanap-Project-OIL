@@ -149,6 +149,38 @@ class FirefighterLogicTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(moves, [(1, "right")])
         self.assertEqual(commands, [])
 
+    async def test_firefighter_uses_drone_fire_data_when_it_sees_no_fire(self) -> None:
+        moves: list[tuple[int, str]] = []
+
+        async def queue_move(unit_id: int, direction: str) -> None:
+            moves.append((unit_id, direction))
+
+        async def queue_command(unit_id: int, operation: OperationId, extra_json=None) -> None:
+            raise AssertionError("No command expected")
+
+        firefighter = Unit(
+            unit_id=1,
+            owner="ObudaInnovationLab",
+            unit_type=UnitType.Firefighter,
+            position=Position(0, 0),
+        )
+        drone = Unit(
+            unit_id=2,
+            owner="ObudaInnovationLab",
+            unit_type=UnitType.Firecopter,
+            position=Position(5, 5),
+            seen_fires=[SeenFire(Position(2, 0), 100)],
+        )
+        context = UnitLogicContext(
+            units_by_id={1: firefighter, 2: drone},
+            queue_command=queue_command,
+            queue_move=queue_move,
+        )
+
+        await FirefighterLogic().run(firefighter, context)
+
+        self.assertEqual(moves, [(1, "right")])
+
 
 if __name__ == "__main__":
     unittest.main()

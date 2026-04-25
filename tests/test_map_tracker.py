@@ -127,6 +127,46 @@ class MapTrackerFireMemoryTests(unittest.TestCase):
         self.assertIn("# Bounds: x=0..11, y=0..11", map_lines)
         self.assertTrue(any(line.startswith("   0 ") for line in map_lines))
 
+    def test_written_map_keeps_square_unknown_area_when_only_one_axis_is_explored(self) -> None:
+        tracker = self._tracker()
+        tracker.update_from_units(
+            {
+                1: self._unit(
+                    position=(0, 60),
+                    sight_tiles=16,
+                )
+            }
+        )
+
+        map_lines = tracker.map_path.read_text(encoding="utf-8").splitlines()
+        self.assertIn("# Bounds: x=0..76, y=0..76", map_lines)
+
+    def test_unit_overlay_is_visible_on_fire_and_water_tiles(self) -> None:
+        tracker = self._tracker()
+        tracker.update_from_units(
+            {
+                1: Unit(
+                    unit_id=1,
+                    owner="ObudaInnovationLab",
+                    unit_type=UnitType.Firetruck,
+                    position=Position(2, 2),
+                    sight_tiles=1,
+                    seen_fires=[SeenFire(Position(2, 2), 100)],
+                    seen_waters=[Position(1, 2)],
+                ),
+                2: Unit(
+                    unit_id=2,
+                    owner="ObudaInnovationLab",
+                    unit_type=UnitType.Firecopter,
+                    position=Position(1, 2),
+                    sight_tiles=1,
+                ),
+            }
+        )
+
+        map_contents = tracker.map_path.read_text(encoding="utf-8")
+        self.assertIn("C T", map_contents)
+
     def test_failed_moves_detect_right_and_bottom_borders(self) -> None:
         tracker = self._tracker()
         unit = self._unit(

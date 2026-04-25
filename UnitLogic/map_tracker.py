@@ -30,9 +30,11 @@ class MapTracker:
         self._detected_right_border: int | None = None
         self._detected_bottom_border: int | None = None
         self._last_unit_overlays: dict[tuple[int, int], str] = {}
+        self._observation_version = 0
         self._write_map({})
 
     def update_from_units(self, units_by_id: dict[int, Unit]) -> None:
+        self._observation_version += 1
         visible_cells: set[tuple[int, int]] = set()
         current_fire_positions: set[tuple[int, int]] = set()
         current_water_positions: set[tuple[int, int]] = set()
@@ -151,6 +153,10 @@ class MapTracker:
         if not self.has_detected_full_bounds():
             return None
         return (self._detected_right_border // 2, self._detected_bottom_border // 2)
+
+    @property
+    def observation_version(self) -> int:
+        return self._observation_version
 
     def record_failed_move(
         self,
@@ -321,13 +327,13 @@ class MapTracker:
             return
 
         min_x = 0
-        max_x = max(x for x, _ in all_coordinates)
-        if self._detected_right_border is not None:
-            max_x = max(max_x, self._detected_right_border)
         min_y = 0
-        max_y = max(y for _, y in all_coordinates)
-        if self._detected_bottom_border is not None:
-            max_y = max(max_y, self._detected_bottom_border)
+        observed_max_x = max(x for x, _ in all_coordinates)
+        observed_max_y = max(y for _, y in all_coordinates)
+        observed_edge = max(observed_max_x, observed_max_y)
+
+        max_x = self._detected_right_border if self._detected_right_border is not None else observed_edge
+        max_y = self._detected_bottom_border if self._detected_bottom_border is not None else observed_edge
 
         map_contents = [
             "# Team map knowledge",
@@ -360,6 +366,9 @@ class MapTracker:
         coordinates: tuple[int, int],
         unit_overlays: dict[tuple[int, int], str],
     ) -> str:
+        if coordinates in unit_overlays:
+            return unit_overlays[coordinates]
+
         remembered_symbol = self._known_cells.get(coordinates, self._UNKNOWN)
 
         if remembered_symbol == self._FIRE:
@@ -368,7 +377,7 @@ class MapTracker:
         if remembered_symbol == self._WATER:
             return self._WATER
 
-        return unit_overlays.get(coordinates, remembered_symbol)
+        return remembered_symbol
 
     @staticmethod
     def _neighbors_of(coordinates: tuple[int, int]) -> tuple[tuple[int, int], ...]:

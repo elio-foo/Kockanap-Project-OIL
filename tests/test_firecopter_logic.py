@@ -196,6 +196,47 @@ class FirecopterLogicTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(tracker.is_within_detected_bounds((1, 0)))
         self.assertEqual(moves[-1][1], "right")
 
+    async def test_repeated_logic_without_new_observation_does_not_detect_border(self) -> None:
+        moves: list[tuple[int, str]] = []
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        tracker = MapTracker(Path(temp_dir.name) / "map.txt")
+        logic = FirecopterLogic()
+
+        async def queue_move(unit_id: int, direction: str) -> None:
+            moves.append((unit_id, direction))
+
+        async def queue_command(unit_id: int, operation, extra_json=None) -> None:
+            raise AssertionError("No command expected")
+
+        unit = Unit(
+            unit_id=1,
+            owner="ObudaInnovationLab",
+            unit_type=UnitType.Firecopter,
+            position=Position(0, 0),
+            sight_tiles=1,
+        )
+
+        tracker.update_from_units({1: unit})
+        context = UnitLogicContext(
+            units_by_id={1: unit},
+            queue_command=queue_command,
+            queue_move=queue_move,
+            map_tracker=tracker,
+        )
+
+        await logic.run(unit, context)
+        await logic.run(unit, context)
+        await logic.run(unit, context)
+
+        self.assertTrue(tracker.is_within_detected_bounds((1, 0)))
+        self.assertEqual(moves, [(1, "right")])
+
+    async def test_firecopter_detects_two_tile_loop_pattern(self) -> None:
+        logic = FirecopterLogic()
+        self.assertTrue(logic._is_two_tile_loop([(0, 0), (1, 0), (0, 0), (1, 0)]))
+        self.assertFalse(logic._is_two_tile_loop([(0, 0), (1, 0), (1, 1), (1, 0)]))
+
     async def test_repeated_stalled_updates_detect_right_border(self) -> None:
         moves: list[tuple[int, str]] = []
         temp_dir = tempfile.TemporaryDirectory()
