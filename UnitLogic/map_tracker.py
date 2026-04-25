@@ -110,6 +110,7 @@ class MapTracker:
             water_tiles,
             key=lambda coordinates: self._distance(origin, coordinates),
         )
+
     def get_known_cells(self) -> dict[tuple[int, int], str]:
         return dict(self._known_cells)
 
@@ -346,8 +347,8 @@ class MapTracker:
 
     @staticmethod
     def _neighbors(coordinates: tuple[int, int]) -> tuple[tuple[int, int], ...]:
-        x, y = coordinates
-        return (
+        return MapTracker._neighbors_of(coordinates)
+
     def _has_unknown_neighbor(self, coordinates: tuple[int, int]) -> bool:
         return any(
             self.is_within_detected_bounds(neighbor) and neighbor not in self._known_cells
@@ -378,11 +379,11 @@ class MapTracker:
             (x, y + 1),
             (x, y - 1),
         )
+        return tuple(neighbor for neighbor in neighbors if neighbor[0] >= 0 and neighbor[1] >= 0)
 
     @staticmethod
     def _distance(a: tuple[int, int], b: tuple[int, int]) -> int:
         return abs(a[0] - b[0]) + abs(a[1] - b[1])
-        return tuple(neighbor for neighbor in neighbors if neighbor[0] >= 0 and neighbor[1] >= 0)
 
     @classmethod
     def _symbol_for_unit(cls, unit: Unit) -> str:

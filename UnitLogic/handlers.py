@@ -17,9 +17,325 @@ class BaseUnitLogic:
 
 
 class FirefighterLogic(BaseUnitLogic):
+    _WATER_CELL = "W"
+    _PATHFINDING_MARGIN = 8
+    _MOVE_OPTIONS = (
+        ("right", (1, 0)),
+        ("down", (0, 1)),
+        ("left", (-1, 0)),
+        ("up", (0, -1)),
+    )
+
+    def __init__(self) -> None:
+        self._issued_action_by_unit: dict[int, dict[str, object]] = {}
+
     async def run(self, unit: Unit, context: UnitLogicContext) -> None:
-        todos("Implement firefighter behavior here.")
-        _ = (unit, context)
+        if unit.id is None or unit.position is None:
+            return
+
+        target_fire, path_direction = self._find_nearest_reachable_fire(unit, context)
+        if target_fire is None:
+            return
+
+        if self._is_in_attack_range(unit.position, target_fire.position):
+            await self._queue_command_once(
+                unit,
+                context,
+                OperationId.EXTINGUISH,
+                self._coordinates_of(target_fire.position),
+                target_fire.hp,
+            )
+            return
+
+        if path_direction is not None:
+            await self._queue_move_once(
+                unit,
+                context,
+                path_direction,
+                self._target_for_direction(unit.position, path_direction),
+            )
+
+    def _find_nearest_reachable_fire(
+        self,
+        unit: Unit,
+        context: UnitLogicContext,
+    ) -> tuple[SeenFire | None, str | None]:
+        active_fires = self._collect_prioritized_fires(unit, context)
+        if not active_fires or unit.position is None:
+            return None, None
+
+        unit_position = self._coordinates_of(unit.position)
+        water_cells = self._collect_water_cells(context)
+        known_cells = context.map_tracker.get_known_cells() if context.map_tracker is not None else {}
+
+        sorted_fires = sorted(
+            active_fires,
+            key=lambda fire: (
+                self._distance_tuple(unit_position, self._coordinates_of(fire.position)),
+                -fire.hp,
+            ),
+        )
+
+        for fire in sorted_fires:
+            target = self._coordinates_of(fire.position)
+            if self._distance_tuple(unit_position, target) <= 1:
+                return fire, None
+
+            for attack_position in self._attack_positions_for_fire(target, water_cells):
+                path = self._find_path(
+                    start=unit_position,
+                    goal=attack_position,
+                    water_cells=water_cells,
+                    known_cells=known_cells,
+                )
+                if path:
+                    return fire, path[0]
+
+        return None, None
+
+    def _collect_prioritized_fires(
+        self,
+        unit: Unit,
+        context: UnitLogicContext,
+    ) -> list[SeenFire]:
+        prioritized_fires: list[SeenFire] = []
+        seen_positions: set[tuple[int, int]] = set()
+
+        for seen_fire in unit.seenFires:
+            if seen_fire.hp <= 0:
+                continue
+            coordinates = (seen_fire.position.x, seen_fire.position.y)
+            if coordinates in seen_positions:
+                continue
+            prioritized_fires.append(seen_fire)
+            seen_positions.add(coordinates)
+
+        for seen_fire in self._collect_active_fires(context, drone_only=True):
+            coordinates = (seen_fire.position.x, seen_fire.position.y)
+            if coordinates in seen_positions:
+                continue
+            prioritized_fires.append(seen_fire)
+            seen_positions.add(coordinates)
+
+        return prioritized_fires
+
+    def _collect_active_fires(
+        self,
+        context: UnitLogicContext,
+        drone_only: bool = False,
+    ) -> list[SeenFire]:
+        fires_by_position: dict[tuple[int, int], SeenFire] = {}
+
+        for tracked_unit in context.units_by_id.values():
+            if drone_only and tracked_unit.type is not UnitType.Firecopter:
+                continue
+
+            for seen_fire in tracked_unit.seenFires:
+                if seen_fire.hp <= 0:
+                    continue
+
+                key = (seen_fire.position.x, seen_fire.position.y)
+                existing_fire = fires_by_position.get(key)
+
+                if existing_fire is None or seen_fire.hp > existing_fire.hp:
+                    fires_by_position[key] = seen_fire
+
+        return list(fires_by_position.values())
+
+    def _attack_positions_for_fire(
+        self,
+        fire_position: tuple[int, int],
+        water_cells: set[tuple[int, int]],
+    ) -> list[tuple[int, int]]:
+        attack_positions: list[tuple[int, int]] = []
+
+        for _, (dx, dy) in self._MOVE_OPTIONS:
+            candidate = (fire_position[0] + dx, fire_position[1] + dy)
+            if candidate[0] < 0 or candidate[1] < 0:
+                continue
+            if candidate in water_cells:
+                continue
+            attack_positions.append(candidate)
+
+        return sorted(
+            attack_positions,
+            key=lambda position: (
+                self._distance_tuple(position, fire_position),
+                position[1],
+                position[0],
+            ),
+        )
+
+    def _collect_water_cells(self, context: UnitLogicContext) -> set[tuple[int, int]]:
+        water_cells: set[tuple[int, int]] = set()
+
+        if context.map_tracker is not None:
+            water_cells.update(
+                coordinates
+                for coordinates, cell_type in context.map_tracker.get_known_cells().items()
+                if cell_type == self._WATER_CELL
+            )
+
+        for tracked_unit in context.units_by_id.values():
+            for seen_water in tracked_unit.seenWaters:
+                water_cells.add((seen_water.x, seen_water.y))
+
+        return water_cells
+
+    def _find_path(
+        self,
+        *,
+        start: tuple[int, int],
+        goal: tuple[int, int],
+        water_cells: set[tuple[int, int]],
+        known_cells: dict[tuple[int, int], str],
+    ) -> list[str] | None:
+        if goal in water_cells:
+            return None
+
+        min_x, max_x, min_y, max_y = self._pathfinding_bounds(start, goal, known_cells, water_cells)
+        frontier: list[tuple[int, int, tuple[int, int]]] = []
+        heappush(frontier, (0, 0, start))
+        came_from: dict[tuple[int, int], tuple[tuple[int, int], str] | None] = {start: None}
+        cost_so_far: dict[tuple[int, int], int] = {start: 0}
+        sequence = 0
+
+        while frontier:
+            _, _, current = heappop(frontier)
+
+            if current == goal:
+                return self._reconstruct_path(came_from, goal)
+
+            for direction, (dx, dy) in self._MOVE_OPTIONS:
+                neighbor = (current[0] + dx, current[1] + dy)
+                if not self._is_within_bounds(neighbor, min_x, max_x, min_y, max_y):
+                    continue
+                if neighbor in water_cells:
+                    continue
+
+                new_cost = cost_so_far[current] + 1
+                if new_cost >= cost_so_far.get(neighbor, 1_000_000_000):
+                    continue
+
+                cost_so_far[neighbor] = new_cost
+                came_from[neighbor] = (current, direction)
+                sequence += 1
+                priority = new_cost + self._distance_tuple(neighbor, goal)
+                heappush(frontier, (priority, sequence, neighbor))
+
+        return None
+
+    def _pathfinding_bounds(
+        self,
+        start: tuple[int, int],
+        goal: tuple[int, int],
+        known_cells: dict[tuple[int, int], str],
+        water_cells: set[tuple[int, int]],
+    ) -> tuple[int, int, int, int]:
+        relevant_cells = set(known_cells) | water_cells | {start, goal}
+        min_x = max(0, min(x for x, _ in relevant_cells) - self._PATHFINDING_MARGIN)
+        max_x = max(x for x, _ in relevant_cells) + self._PATHFINDING_MARGIN
+        min_y = max(0, min(y for _, y in relevant_cells) - self._PATHFINDING_MARGIN)
+        max_y = max(y for _, y in relevant_cells) + self._PATHFINDING_MARGIN
+        return min_x, max_x, min_y, max_y
+
+    @staticmethod
+    def _is_within_bounds(
+        coordinates: tuple[int, int],
+        min_x: int,
+        max_x: int,
+        min_y: int,
+        max_y: int,
+    ) -> bool:
+        x, y = coordinates
+        return min_x <= x <= max_x and min_y <= y <= max_y
+
+    @staticmethod
+    def _reconstruct_path(
+        came_from: dict[tuple[int, int], tuple[tuple[int, int], str] | None],
+        goal: tuple[int, int],
+    ) -> list[str]:
+        path: list[str] = []
+        current = goal
+
+        while came_from[current] is not None:
+            previous, direction = came_from[current]
+            path.append(direction)
+            current = previous
+
+        path.reverse()
+        return path
+
+    async def _queue_move_once(
+        self,
+        unit: Unit,
+        context: UnitLogicContext,
+        direction: str,
+        target: tuple[int, int],
+    ) -> None:
+        if unit.id is None or unit.position is None:
+            return
+
+        action = {
+            "kind": "move",
+            "position": self._coordinates_of(unit.position),
+            "direction": direction,
+            "target": target,
+        }
+        if self._is_duplicate_action(unit.id, action):
+            return
+
+        self._issued_action_by_unit[unit.id] = action
+        await context.queue_move(unit.id, direction)
+
+    async def _queue_command_once(
+        self,
+        unit: Unit,
+        context: UnitLogicContext,
+        operation: OperationId,
+        target: tuple[int, int],
+        target_hp: int,
+    ) -> None:
+        if unit.id is None or unit.position is None:
+            return
+
+        action = {
+            "kind": operation.value,
+            "position": self._coordinates_of(unit.position),
+            "target": target,
+            "target_hp": target_hp,
+        }
+        if self._is_duplicate_action(unit.id, action):
+            return
+
+        self._issued_action_by_unit[unit.id] = action
+        await context.queue_command(unit.id, operation)
+
+    def _is_duplicate_action(self, unit_id: int, action: dict[str, object]) -> bool:
+        return self._issued_action_by_unit.get(unit_id) == action
+
+    @staticmethod
+    def _distance_tuple(a: tuple[int, int], b: tuple[int, int]) -> int:
+        return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+    @staticmethod
+    def _coordinates_of(position: Position) -> tuple[int, int]:
+        return (position.x, position.y)
+
+    @classmethod
+    def _target_for_direction(cls, position: Position, direction: str) -> tuple[int, int]:
+        for candidate_direction, (dx, dy) in cls._MOVE_OPTIONS:
+            if candidate_direction == direction:
+                return (position.x + dx, position.y + dy)
+
+        return (position.x, position.y)
+
+    @classmethod
+    def _is_in_attack_range(cls, unit_position: Position, fire_position: Position) -> bool:
+        return cls._distance_tuple(
+            (unit_position.x, unit_position.y),
+            (fire_position.x, fire_position.y),
+        ) <= 1
 
 
 class FiretruckLogic(BaseUnitLogic):
@@ -900,14 +1216,6 @@ class FirecopterLogic(BaseUnitLogic):
             return "down" if dy > 0 else "up"
 
         return None
-
-
-class FiretruckLogic(BaseUnitLogic):
-    async def run(self, unit: Unit, context: UnitLogicContext) -> None:
-        todos("Implement firetruck behavior here.")
-        _ = (unit, context)
-
-
 class FirecopterLogic(BaseUnitLogic):
     _SCAN_START = (16, 16)
     _VERTICAL_SHIFT_OVERLAP_TILES = 2
