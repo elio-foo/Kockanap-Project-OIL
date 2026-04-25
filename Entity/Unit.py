@@ -39,6 +39,7 @@ class Unit:
         current_hp=0,
         seen_fires=None,
         seen_waters=None,
+        visible_tiles=None,
         damage=None,
         sight_tiles=None,
         water_supply=None,
@@ -52,6 +53,7 @@ class Unit:
         self.currentHP: int = current_hp
         self.seenFires: list[SeenFire] = seen_fires or []
         self.seenWaters: list[Position] = seen_waters or []
+        self.visibleTiles: list[Position] = visible_tiles or []
         self.damage: int = 0
         self.sightTiles: int = 0
         self.waterSupply: int | float = 0
@@ -158,6 +160,19 @@ class Unit:
             self._parse_position(water_data)
             for water_data in json_data.get("SeenWaters", [])
         ]
+        visible_tile_entries = self._first_present(
+            json_data,
+            "VisibleTiles",
+            "SeenTiles",
+            "VisiblePositions",
+            "visibleTiles",
+            "seenTiles",
+            "visiblePositions",
+        )
+        self.visibleTiles = [
+            self._parse_position(tile_data)
+            for tile_data in (visible_tile_entries or [])
+        ]
 
         return self
 
@@ -166,5 +181,6 @@ class Unit:
             f"Unit(id={self.id}, owner={self.owner}, type={self.type}, "
             f"position={self.position}, hp={self.currentHP}, water={self.currentWaterLevel}, "
             f"damage={self.damage}, sightTiles={self.sightTiles}, waterSupply={self.waterSupply}, "
-            f"speed={self.speed}, seenFires={len(self.seenFires)}, seenWaters={len(self.seenWaters)})"
+            f"speed={self.speed}, seenFires={len(self.seenFires)}, "
+            f"seenWaters={len(self.seenWaters)}, visibleTiles={len(self.visibleTiles)})"
         )
