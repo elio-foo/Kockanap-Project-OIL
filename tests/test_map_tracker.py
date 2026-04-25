@@ -112,6 +112,45 @@ class MapTrackerFireMemoryTests(unittest.TestCase):
         self.assertEqual(known_cells[(20, 20)], ".")
         self.assertNotIn((8, 8), known_cells)
 
+    def test_written_map_is_anchored_at_top_left_origin(self) -> None:
+        tracker = self._tracker()
+        tracker.update_from_units(
+            {
+                1: self._unit(
+                    position=(10, 10),
+                    sight_tiles=1,
+                )
+            }
+        )
+
+        map_lines = tracker.map_path.read_text(encoding="utf-8").splitlines()
+        self.assertIn("# Bounds: x=0..11, y=0..11", map_lines)
+        self.assertTrue(any(line.startswith("   0 ") for line in map_lines))
+
+    def test_failed_moves_detect_right_and_bottom_borders(self) -> None:
+        tracker = self._tracker()
+        unit = self._unit(
+            position=(10, 10),
+            sight_tiles=1,
+        )
+
+        tracker.update_from_units({1: unit})
+        self.assertIn((11, 10), tracker.get_known_cells())
+        self.assertIn((10, 11), tracker.get_known_cells())
+
+        tracker.record_failed_move((10, 10), (11, 10))
+        tracker.record_failed_move((10, 10), (10, 11))
+        tracker.update_from_units({1: unit})
+
+        known_cells = tracker.get_known_cells()
+        self.assertNotIn((11, 10), known_cells)
+        self.assertNotIn((10, 11), known_cells)
+        self.assertFalse(tracker.is_within_detected_bounds((11, 10)))
+        self.assertFalse(tracker.is_within_detected_bounds((10, 11)))
+
+        map_lines = tracker.map_path.read_text(encoding="utf-8").splitlines()
+        self.assertIn("# Bounds: x=0..10, y=0..10", map_lines)
+
     def test_alternate_fire_and_water_lists_are_parsed(self) -> None:
         parsed_unit = Unit().from_json(
             {

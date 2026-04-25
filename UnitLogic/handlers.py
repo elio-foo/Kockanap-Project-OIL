@@ -489,6 +489,7 @@ class FiretruckLogic(BaseUnitLogic):
 
 
 class FirecopterLogic(BaseUnitLogic):
+    _SCAN_START = (16, 16)
     _VERTICAL_SHIFT_OVERLAP_TILES = 2
     _DIRECTION_VECTORS = {
         "right": (1, 0),
@@ -557,7 +558,7 @@ class FirecopterLogic(BaseUnitLogic):
         state = self._get_or_create_roam_state(unit)
         state["shift_stride"] = self._vertical_shift_stride(unit)
         current_position = (unit.position.x, unit.position.y)
-        self._apply_roam_feedback(state, current_position)
+        self._apply_roam_feedback(state, current_position, context)
 
         move_choice = self._choose_roam_move(state, current_position, context)
         if move_choice is None:
@@ -583,7 +584,9 @@ class FirecopterLogic(BaseUnitLogic):
             "last_position": origin,
             "last_attempted_target": None,
             "last_attempted_direction": None,
-            "phase": "sweep",
+            "stalled_target": None,
+            "stalled_attempts": 0,
+            "phase": "return_to_corner",
             "sweep_direction": "right",
             "vertical_direction": "down",
             "shift_stride": self._vertical_shift_stride(unit),
@@ -598,7 +601,12 @@ class FirecopterLogic(BaseUnitLogic):
     def _vertical_shift_stride(cls, unit: Unit) -> int:
         return max(1, unit.sightTiles - cls._VERTICAL_SHIFT_OVERLAP_TILES)
 
-    def _apply_roam_feedback(self, state: dict[str, object], current_position: tuple[int, int]) -> None:
+    def _apply_roam_feedback(
+        self,
+        state: dict[str, object],
+        current_position: tuple[int, int],
+        context: UnitLogicContext,
+    ) -> None:
         last_position = state.get("last_position")
         last_attempted_target = state.get("last_attempted_target")
         phase = state.get("phase")
@@ -616,19 +624,35 @@ class FirecopterLogic(BaseUnitLogic):
             and isinstance(last_attempted_target, tuple)
             and current_position == last_position
         ):
-            self._mark_blocked(state, last_attempted_target)
-            if phase == "sweep":
-                state["phase"] = "shift_row"
-                state["shift_remaining"] = state.get("shift_stride", 1)
-            elif phase == "shift_row":
-                state["phase"] = "sweep"
-                state["vertical_direction"] = self._reverse_vertical_direction(
-                    state.get("vertical_direction")
-                )
-                state["sweep_direction"] = self._reverse_horizontal_direction(
-                    state.get("sweep_direction")
-                )
-                state["shift_remaining"] = 0
+            stalled_target = state.get("stalled_target")
+            stalled_attempts = state.get("stalled_attempts", 0)
+            if stalled_target == last_attempted_target and isinstance(stalled_attempts, int):
+                stalled_attempts += 1
+            else:
+                stalled_target = last_attempted_target
+                stalled_attempts = 1
+
+            state["stalled_target"] = stalled_target
+            state["stalled_attempts"] = stalled_attempts
+
+            if stalled_attempts >= 2:
+                self._mark_blocked(state, last_attempted_target)
+                if context.map_tracker is not None:
+                    context.map_tracker.record_failed_move(current_position, last_attempted_target)
+                if phase == "sweep":
+                    state["phase"] = "shift_row"
+                    state["shift_remaining"] = state.get("shift_stride", 1)
+                elif phase == "shift_row":
+                    state["phase"] = "sweep"
+                    state["vertical_direction"] = self._reverse_vertical_direction(
+                        state.get("vertical_direction")
+                    )
+                    state["sweep_direction"] = self._reverse_horizontal_direction(
+                        state.get("sweep_direction")
+                    )
+                    state["shift_remaining"] = 0
+                state["stalled_target"] = None
+                state["stalled_attempts"] = 0
         elif phase == "shift_row":
             if not isinstance(shift_remaining, int):
                 shift_remaining = 0
@@ -643,6 +667,14 @@ class FirecopterLogic(BaseUnitLogic):
             else:
                 state["shift_remaining"] = shift_remaining
 
+        if not (
+            isinstance(last_position, tuple)
+            and isinstance(last_attempted_target, tuple)
+            and current_position == last_position
+        ):
+            state["stalled_target"] = None
+            state["stalled_attempts"] = 0
+
         state["last_position"] = current_position
         state["last_attempted_target"] = None
         state["last_attempted_direction"] = None
@@ -655,10 +687,22 @@ class FirecopterLogic(BaseUnitLogic):
     ) -> tuple[str, tuple[int, int]] | None:
         blocked_cells = state.get("blocked_cells")
         visit_counts = state.get("visit_counts")
+        water_cells = self._collect_water_cells(context)
         if not isinstance(blocked_cells, set):
             return None
         if not isinstance(visit_counts, dict):
             return None
+
+        phase = state.get("phase")
+        if phase == "return_to_corner":
+            move_choice = self._move_towards_corner(state, current_position, water_cells)
+            if move_choice is not None:
+                return move_choice
+            if state.get("phase") == "move_to_scan_start":
+                return self._move_towards_scan_start(state, current_position, context, water_cells)
+            return None
+        if phase == "move_to_scan_start":
+            return self._move_towards_scan_start(state, current_position, context, water_cells)
 
         for _ in range(4):
             phase = state.get("phase")
@@ -688,7 +732,18 @@ class FirecopterLogic(BaseUnitLogic):
                         preferred_target_blocked = True
                     continue
 
+                if context.map_tracker is not None and not context.map_tracker.is_within_detected_bounds(target):
+                    self._mark_blocked(state, target)
+                    if direction == preferred_direction:
+                        preferred_target_blocked = True
+                    continue
+
                 if target in blocked_cells:
+                    if direction == preferred_direction:
+                        preferred_target_blocked = True
+                    continue
+                if target in water_cells:
+                    self._mark_blocked(state, target)
                     if direction == preferred_direction:
                         preferred_target_blocked = True
                     continue
@@ -724,6 +779,117 @@ class FirecopterLogic(BaseUnitLogic):
                 continue
 
         return None
+
+    def _move_towards_corner(
+        self,
+        state: dict[str, object],
+        current_position: tuple[int, int],
+        water_cells: set[tuple[int, int]],
+    ) -> tuple[str, tuple[int, int]] | None:
+        if (0, 0) in water_cells:
+            state["phase"] = "move_to_scan_start"
+            return None
+
+        if current_position == (0, 0):
+            state["phase"] = "move_to_scan_start"
+            return None
+
+        candidate_directions: list[str] = []
+        if current_position[0] > 0:
+            candidate_directions.append("left")
+        if current_position[1] > 0:
+            candidate_directions.append("up")
+
+        blocked_cells = state.get("blocked_cells")
+        if not isinstance(blocked_cells, set):
+            return None
+
+        for direction in candidate_directions:
+            target = self._apply_direction(current_position, direction)
+            if target in water_cells:
+                self._mark_blocked(state, target)
+                continue
+            if target in blocked_cells:
+                continue
+            return direction, target
+
+        # If we cannot make progress toward the corner, fall back to the scan-start phase.
+        state["phase"] = "move_to_scan_start"
+
+        return None
+
+    def _move_towards_scan_start(
+        self,
+        state: dict[str, object],
+        current_position: tuple[int, int],
+        context: UnitLogicContext,
+        water_cells: set[tuple[int, int]],
+    ) -> tuple[str, tuple[int, int]] | None:
+        target_position = self._resolved_scan_start(context, water_cells)
+        if current_position == target_position:
+            state["phase"] = "sweep"
+            state["sweep_direction"] = "right"
+            state["vertical_direction"] = "down"
+            state["shift_remaining"] = 0
+            return self._choose_roam_move(state, current_position, context)
+
+        blocked_cells = state.get("blocked_cells")
+        if not isinstance(blocked_cells, set):
+            return None
+
+        candidate_directions: list[str] = []
+        if current_position[0] < target_position[0]:
+            candidate_directions.append("right")
+        elif current_position[0] > target_position[0]:
+            candidate_directions.append("left")
+
+        if current_position[1] < target_position[1]:
+            candidate_directions.append("down")
+        elif current_position[1] > target_position[1]:
+            candidate_directions.append("up")
+
+        for direction in candidate_directions:
+            target = self._apply_direction(current_position, direction)
+            if context.map_tracker is not None and not context.map_tracker.is_within_detected_bounds(target):
+                self._mark_blocked(state, target)
+                continue
+            if target in water_cells:
+                self._mark_blocked(state, target)
+                continue
+            if target in blocked_cells:
+                continue
+            return direction, target
+
+        return None
+
+    @classmethod
+    def _resolved_scan_start(
+        cls,
+        context: UnitLogicContext,
+        water_cells: set[tuple[int, int]],
+    ) -> tuple[int, int]:
+        target_x, target_y = cls._SCAN_START
+        map_tracker = context.map_tracker
+        if map_tracker is None:
+            while (target_x, target_y) in water_cells and (target_x > 0 or target_y > 0):
+                if target_x > 0:
+                    target_x -= 1
+                if target_y > 0:
+                    target_y -= 1
+            return target_x, target_y
+
+        while target_x > 0 and not map_tracker.is_within_detected_bounds((target_x, 0)):
+            target_x -= 1
+        while target_y > 0 and not map_tracker.is_within_detected_bounds((0, target_y)):
+            target_y -= 1
+
+        while (target_x, target_y) in water_cells and (target_x > 0 or target_y > 0):
+            if target_x > 0:
+                target_x -= 1
+            if target_y > 0:
+                target_y -= 1
+
+        return target_x, target_y
 
     def _move_score(
         self,
