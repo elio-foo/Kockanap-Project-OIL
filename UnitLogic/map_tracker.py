@@ -53,6 +53,41 @@ class MapTracker:
 
         self._write_map(unit_overlays)
 
+    def nearest_unknown_tile(self, origin: tuple[int, int]) -> tuple[int, int] | None:
+        if not self._known_cells:
+            return None
+
+        frontier_candidates: set[tuple[int, int]] = set()
+
+        for coordinates in self._known_cells:
+            for neighbor in self._neighbors(coordinates):
+                if neighbor[0] < 0 or neighbor[1] < 0:
+                    continue
+                if neighbor not in self._known_cells:
+                    frontier_candidates.add(neighbor)
+
+        if not frontier_candidates:
+            return None
+
+        return min(
+            frontier_candidates,
+            key=lambda coordinates: self._distance(origin, coordinates),
+        )
+
+    def nearest_water_tile(self, origin: tuple[int, int]) -> tuple[int, int] | None:
+        water_tiles = [
+            coordinates
+            for coordinates, marker in self._known_cells.items()
+            if marker == self._WATER
+        ]
+        if not water_tiles:
+            return None
+
+        return min(
+            water_tiles,
+            key=lambda coordinates: self._distance(origin, coordinates),
+        )
+
     def _visible_cells_for_unit(self, unit: Unit) -> set[tuple[int, int]]:
         if unit.position is None:
             return set()
@@ -107,6 +142,20 @@ class MapTracker:
             map_contents.append(f"{y:>4} {' '.join(row_cells)}")
 
         self.map_path.write_text("\n".join(map_contents) + "\n", encoding="utf-8")
+
+    @staticmethod
+    def _neighbors(coordinates: tuple[int, int]) -> tuple[tuple[int, int], ...]:
+        x, y = coordinates
+        return (
+            (x + 1, y),
+            (x - 1, y),
+            (x, y + 1),
+            (x, y - 1),
+        )
+
+    @staticmethod
+    def _distance(a: tuple[int, int], b: tuple[int, int]) -> int:
+        return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
     @classmethod
     def _symbol_for_unit(cls, unit: Unit) -> str:

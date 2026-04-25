@@ -30,51 +30,101 @@ class FiretruckLogic(BaseUnitLogic):
 
     def __init__(self) -> None:
         self._roam_state_by_unit: dict[int, dict[str, object]] = {}
+        self._state_by_unit: dict[int, dict[str, object]] = {}
 
     async def run(self, unit: Unit, context: UnitLogicContext) -> None:
         if unit.id is None or unit.position is None:
             return
 
-        target_fire = self._find_fire_with_most_neighbors(unit, context)
-        if target_fire is not None:
-            self._reset_roam_progress(unit)
+        state = self._get_or_create_state(unit)
+        current_position = (unit.position.x, unit.position.y)
 
-            if self._is_on_fire_tile(unit.position, target_fire.position):
-                await context.queue_command(unit.id, OperationId.EXTINGUISH)
+        if self._needs_refill(unit, state):
+            state["mode"] = "refill"
+
+        if state["mode"] == "firefight":
+            handled = await self._run_firefight(unit, context, state)
+            if handled:
                 return
 
-            direction = self._direction_towards(unit.position, target_fire.position)
-            if direction is not None:
-                await context.queue_move(unit.id, direction)
+        if state["mode"] == "refill":
+            handled = await self._run_refill(unit, context, state, current_position)
+            if handled:
+                return
+
+        priority_fire = self._find_priority_fire_from_drone(unit, context)
+        if priority_fire is not None and unit.currentWaterLevel > 0:
+            self._lock_target_fire(state, priority_fire.position.x, priority_fire.position.y)
+            self._reset_roam_progress(unit)
+            await self._run_firefight(unit, context, state)
             return
 
-        roam_direction = self._next_roam_direction(unit)
+        roam_direction = self._next_roam_direction(unit, context)
         if roam_direction is None:
             return
 
+        state["mode"] = "roam"
         await context.queue_move(unit.id, roam_direction)
 
-    def _find_fire_with_most_neighbors(
+    async def _run_firefight(
         self,
         unit: Unit,
         context: UnitLogicContext,
-    ) -> SeenFire | None:
-        active_fires = self._collect_active_fires(context)
-        if not active_fires or unit.position is None:
-            return None
+        state: dict[str, object],
+    ) -> bool:
+        target_coordinates = state.get("target_fire")
+        if not isinstance(target_coordinates, tuple):
+            state["mode"] = "roam"
+            return False
 
-        # Build a set of fire positions for neighbor lookup
-        fire_positions = {(fire.position.x, fire.position.y) for fire in active_fires}
+        if unit.currentWaterLevel <= 0:
+            state["mode"] = "refill"
+            return False
 
-        # Find the fire with the most adjacent fires
-        return max(
-            active_fires,
-            key=lambda fire: (
-                self._count_adjacent_fires(fire.position, fire_positions),
-                -self._distance(unit.position, fire.position),
-                -fire.hp,
-            ),
-        )
+        live_target = self._find_fire_at_coordinates(context, target_coordinates)
+        if live_target is None and unit.position.x == target_coordinates[0] and unit.position.y == target_coordinates[1]:
+            self._reset_truck_state(unit)
+            return False
+
+        destination = live_target.position if live_target is not None else Position(*target_coordinates)
+        state["mode"] = "firefight"
+
+        if self._is_on_fire_tile(unit.position, destination):
+            await context.queue_command(unit.id, OperationId.EXTINGUISH)
+            return True
+
+        direction = self._direction_towards(unit.position, destination)
+        if direction is not None:
+            await context.queue_move(unit.id, direction)
+            return True
+
+        return False
+
+    async def _run_refill(
+        self,
+        unit: Unit,
+        context: UnitLogicContext,
+        state: dict[str, object],
+        current_position: tuple[int, int],
+    ) -> bool:
+        if unit.currentWaterLevel >= unit.waterSupply:
+            self._reset_truck_state(unit)
+            return False
+
+        water_target = self._resolve_refill_target(unit, context, state, current_position)
+        if water_target is None:
+            return False
+
+        if current_position == water_target:
+            await context.queue_command(unit.id, OperationId.REFILL)
+            return True
+
+        direction = self._direction_towards_tuple(current_position, water_target)
+        if direction is not None:
+            await context.queue_move(unit.id, direction)
+            return True
+
+        return False
 
     def _count_adjacent_fires(
         self,
@@ -90,10 +140,54 @@ class FiretruckLogic(BaseUnitLogic):
         ]
         return sum(1 for pos in adjacent_positions if pos in fire_positions)
 
-    def _collect_active_fires(self, context: UnitLogicContext) -> list[SeenFire]:
+    def _find_priority_fire_from_drone(
+        self,
+        unit: Unit,
+        context: UnitLogicContext,
+    ) -> SeenFire | None:
+        drone_fires = self._collect_active_fires(context, drone_only=True)
+        if not drone_fires or unit.position is None:
+            return None
+
+        fire_positions = {(fire.position.x, fire.position.y) for fire in drone_fires}
+        priority_fires = [
+            fire
+            for fire in drone_fires
+            if self._count_adjacent_fires(fire.position, fire_positions) > 0
+        ]
+        if not priority_fires:
+            return None
+
+        return max(
+            priority_fires,
+            key=lambda fire: (
+                self._count_adjacent_fires(fire.position, fire_positions),
+                fire.hp,
+                -self._distance(unit.position, fire.position),
+            ),
+        )
+
+    def _find_fire_at_coordinates(
+        self,
+        context: UnitLogicContext,
+        coordinates: tuple[int, int],
+    ) -> SeenFire | None:
+        for seen_fire in self._collect_active_fires(context):
+            if (seen_fire.position.x, seen_fire.position.y) == coordinates:
+                return seen_fire
+        return None
+
+    def _collect_active_fires(
+        self,
+        context: UnitLogicContext,
+        drone_only: bool = False,
+    ) -> list[SeenFire]:
         fires_by_position: dict[tuple[int, int], SeenFire] = {}
 
         for tracked_unit in context.units_by_id.values():
+            if drone_only and tracked_unit.type is not UnitType.Firecopter:
+                continue
+
             for seen_fire in tracked_unit.seenFires:
                 if seen_fire.hp <= 0:
                     continue
@@ -106,9 +200,13 @@ class FiretruckLogic(BaseUnitLogic):
 
         return list(fires_by_position.values())
 
-    def _next_roam_direction(self, unit: Unit) -> str | None:
+    def _next_roam_direction(self, unit: Unit, context: UnitLogicContext) -> str | None:
         if unit.id is None or unit.position is None:
             return None
+
+        frontier_direction = self._direction_towards_frontier(unit, context)
+        if frontier_direction is not None:
+            return frontier_direction
 
         state = self._get_or_create_roam_state(unit)
         current_position = (unit.position.x, unit.position.y)
@@ -122,6 +220,16 @@ class FiretruckLogic(BaseUnitLogic):
         state["last_position"] = current_position
         state["last_attempted_target"] = target
         return direction
+
+    def _direction_towards_frontier(self, unit: Unit, context: UnitLogicContext) -> str | None:
+        if unit.position is None or context.map_tracker is None:
+            return None
+
+        frontier = context.map_tracker.nearest_unknown_tile((unit.position.x, unit.position.y))
+        if frontier is None:
+            return None
+
+        return self._direction_towards_tuple((unit.position.x, unit.position.y), frontier)
 
     def _get_or_create_roam_state(self, unit: Unit) -> dict[str, object]:
         if unit.id is None or unit.position is None:
@@ -142,6 +250,75 @@ class FiretruckLogic(BaseUnitLogic):
         }
         self._roam_state_by_unit[unit.id] = state
         return state
+
+    def _get_or_create_state(self, unit: Unit) -> dict[str, object]:
+        if unit.id is None:
+            return {}
+
+        existing_state = self._state_by_unit.get(unit.id)
+        if existing_state is not None:
+            return existing_state
+
+        state: dict[str, object] = {
+            "mode": "roam",
+            "target_fire": None,
+            "target_water": None,
+        }
+        self._state_by_unit[unit.id] = state
+        return state
+
+    def _lock_target_fire(self, state: dict[str, object], x: int, y: int) -> None:
+        state["mode"] = "firefight"
+        state["target_fire"] = (x, y)
+        state["target_water"] = None
+
+    def _needs_refill(self, unit: Unit, state: dict[str, object]) -> bool:
+        mode = state.get("mode")
+        return unit.currentWaterLevel <= 0 or mode == "refill"
+
+    def _resolve_refill_target(
+        self,
+        unit: Unit,
+        context: UnitLogicContext,
+        state: dict[str, object],
+        current_position: tuple[int, int],
+    ) -> tuple[int, int] | None:
+        known_target = state.get("target_water")
+        if isinstance(known_target, tuple):
+            return known_target
+
+        water_positions = {
+            (seen_water.x, seen_water.y)
+            for tracked_unit in context.units_by_id.values()
+            for seen_water in tracked_unit.seenWaters
+        }
+
+        if context.map_tracker is not None:
+            tracked_water = context.map_tracker.nearest_water_tile(current_position)
+            if tracked_water is not None:
+                water_positions.add(tracked_water)
+
+        if not water_positions:
+            return None
+
+        nearest_water = min(
+            water_positions,
+            key=lambda coordinates: self._distance_tuple(current_position, coordinates),
+        )
+        state["target_water"] = nearest_water
+        return nearest_water
+
+    def _reset_truck_state(self, unit: Unit) -> None:
+        if unit.id is None:
+            return
+
+        state = self._state_by_unit.get(unit.id)
+        if state is not None:
+            state["mode"] = "roam"
+            state["target_fire"] = None
+            state["target_water"] = None
+
+        self._reset_roam_progress(unit)
 
     def _reset_roam_progress(self, unit: Unit) -> None:
         if unit.id is None:
