@@ -178,8 +178,8 @@ class MapTrackerFireMemoryTests(unittest.TestCase):
         self.assertIn((11, 10), tracker.get_known_cells())
         self.assertIn((10, 11), tracker.get_known_cells())
 
-        tracker.record_failed_move((10, 10), (11, 10))
-        tracker.record_failed_move((10, 10), (10, 11))
+        tracker.record_failed_move((10, 10), (11, 10), confirmed=True)
+        tracker.record_failed_move((10, 10), (10, 11), confirmed=True)
         tracker.update_from_units({1: unit})
 
         known_cells = tracker.get_known_cells()
@@ -190,6 +190,21 @@ class MapTrackerFireMemoryTests(unittest.TestCase):
 
         map_lines = tracker.map_path.read_text(encoding="utf-8").splitlines()
         self.assertIn("# Bounds: x=0..10, y=0..10", map_lines)
+
+    def test_single_failed_downward_move_does_not_shrink_map_y_axis(self) -> None:
+        tracker = self._tracker()
+        unit = self._unit(
+            position=(4, 4),
+            sight_tiles=2,
+        )
+
+        tracker.update_from_units({1: unit})
+        tracker.record_failed_move((4, 4), (4, 5))
+        tracker.update_from_units({1: unit})
+
+        self.assertTrue(tracker.is_within_detected_bounds((4, 5)))
+        map_lines = tracker.map_path.read_text(encoding="utf-8").splitlines()
+        self.assertNotIn("# Bounds: x=0..6, y=0..4", map_lines)
 
     def test_alternate_fire_and_water_lists_are_parsed(self) -> None:
         parsed_unit = Unit().from_json(

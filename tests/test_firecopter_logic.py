@@ -109,7 +109,7 @@ class FirecopterLogicTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(moves, [(1, "right")])
 
-    async def test_firecopter_skips_corner_when_zero_zero_is_water(self) -> None:
+    async def test_firecopter_still_heads_to_corner_when_zero_zero_is_water(self) -> None:
         moves: list[tuple[int, str]] = []
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
@@ -129,6 +129,40 @@ class FirecopterLogicTests(unittest.IsolatedAsyncioTestCase):
             position=Position(5, 5),
             sight_tiles=16,
             seen_waters=[Position(0, 0)],
+        )
+
+        tracker.update_from_units({1: unit})
+        context = UnitLogicContext(
+            units_by_id={1: unit},
+            queue_command=queue_command,
+            queue_move=queue_move,
+            map_tracker=tracker,
+        )
+
+        await logic.run(unit, context)
+
+        self.assertEqual(moves, [(1, "left")])
+
+    async def test_firecopter_can_move_over_water_on_the_way_to_scan_start(self) -> None:
+        moves: list[tuple[int, str]] = []
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        tracker = MapTracker(Path(temp_dir.name) / "map.txt")
+        logic = FirecopterLogic()
+
+        async def queue_move(unit_id: int, direction: str) -> None:
+            moves.append((unit_id, direction))
+
+        async def queue_command(unit_id: int, operation, extra_json=None) -> None:
+            raise AssertionError("No command expected")
+
+        unit = Unit(
+            unit_id=1,
+            owner="ObudaInnovationLab",
+            unit_type=UnitType.Firecopter,
+            position=Position(0, 0),
+            sight_tiles=16,
+            seen_waters=[Position(1, 0)],
         )
 
         tracker.update_from_units({1: unit})
@@ -194,7 +228,7 @@ class FirecopterLogicTests(unittest.IsolatedAsyncioTestCase):
         await logic.run(stalled_unit, stalled_context)
 
         self.assertTrue(tracker.is_within_detected_bounds((1, 0)))
-        self.assertEqual(moves[-1][1], "right")
+        self.assertEqual(len(moves), 2)
 
     async def test_repeated_logic_without_new_observation_reissues_same_move(self) -> None:
         moves: list[tuple[int, str]] = []
@@ -278,7 +312,7 @@ class FirecopterLogicTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(logic._is_two_tile_loop([(0, 0), (1, 0), (0, 0), (1, 0)]))
         self.assertFalse(logic._is_two_tile_loop([(0, 0), (1, 0), (1, 1), (1, 0)]))
 
-    async def test_repeated_stalled_updates_detect_right_border(self) -> None:
+    async def test_repeated_stalled_updates_do_not_detect_right_border_without_independent_confirmation(self) -> None:
         moves: list[tuple[int, str]] = []
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
@@ -329,8 +363,8 @@ class FirecopterLogicTests(unittest.IsolatedAsyncioTestCase):
         tracker.update_from_units({1: stalled_unit})
         await logic.run(stalled_unit, stalled_context)
 
-        self.assertFalse(tracker.is_within_detected_bounds((1, 0)))
-        self.assertNotEqual(moves[-1][1], "right")
+        self.assertTrue(tracker.is_within_detected_bounds((1, 0)))
+        self.assertEqual(len(moves), 3)
 
     async def test_visible_target_does_not_get_recorded_as_border(self) -> None:
         moves: list[tuple[int, str]] = []
@@ -407,8 +441,8 @@ class FirecopterLogicTests(unittest.IsolatedAsyncioTestCase):
             sight_tiles=1,
         )
         tracker.update_from_units({1: unit})
-        tracker.record_failed_move((8, 8), (9, 8))
-        tracker.record_failed_move((8, 8), (8, 9))
+        tracker.record_failed_move((8, 8), (9, 8), confirmed=True)
+        tracker.record_failed_move((8, 8), (8, 9), confirmed=True)
 
         moved_unit = Unit(
             unit_id=1,
@@ -442,8 +476,8 @@ class FirecopterLogicTests(unittest.IsolatedAsyncioTestCase):
         async def queue_command(unit_id: int, operation, extra_json=None) -> None:
             raise AssertionError("No command expected")
 
-        tracker.record_failed_move((8, 8), (9, 8))
-        tracker.record_failed_move((8, 8), (8, 9))
+        tracker.record_failed_move((8, 8), (9, 8), confirmed=True)
+        tracker.record_failed_move((8, 8), (8, 9), confirmed=True)
         unit = Unit(
             unit_id=1,
             owner="ObudaInnovationLab",
@@ -512,8 +546,8 @@ class FirecopterLogicTests(unittest.IsolatedAsyncioTestCase):
         state["phase"] = "frontier_hunt"
         path_goals: list[tuple[int, int]] = []
 
-        def fake_find_copter_path(*, start, goal, water_cells, blocked_cells, map_tracker):
-            _ = (start, water_cells, blocked_cells, map_tracker)
+        def fake_find_copter_path(*, start, goal, blocked_cells, map_tracker):
+            _ = (start, blocked_cells, map_tracker)
             path_goals.append(goal)
             if goal == (8, 7):
                 return ["right"]
@@ -525,7 +559,6 @@ class FirecopterLogicTests(unittest.IsolatedAsyncioTestCase):
             state,
             (7, 7),
             context,
-            set(),
             unit,
         )
 
@@ -597,8 +630,8 @@ class FirecopterLogicTests(unittest.IsolatedAsyncioTestCase):
         async def queue_command(unit_id: int, operation, extra_json=None) -> None:
             raise AssertionError("No command expected")
 
-        tracker.record_failed_move((8, 8), (9, 8))
-        tracker.record_failed_move((8, 8), (8, 9))
+        tracker.record_failed_move((8, 8), (9, 8), confirmed=True)
+        tracker.record_failed_move((8, 8), (8, 9), confirmed=True)
         unit = Unit(
             unit_id=1,
             owner="ObudaInnovationLab",
@@ -626,6 +659,44 @@ class FirecopterLogicTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(state["phase"], "frontier_hunt")
         self.assertEqual(len(moves), 1)
+
+    async def test_copter_uses_only_open_escape_when_three_sides_are_blocked(self) -> None:
+        moves: list[tuple[int, str]] = []
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        tracker = MapTracker(Path(temp_dir.name) / "map.txt")
+        logic = FirecopterLogic()
+
+        async def queue_move(unit_id: int, direction: str) -> None:
+            moves.append((unit_id, direction))
+
+        async def queue_command(unit_id: int, operation, extra_json=None) -> None:
+            raise AssertionError("No command expected")
+
+        unit = Unit(
+            unit_id=1,
+            owner="ObudaInnovationLab",
+            unit_type=UnitType.Firecopter,
+            position=Position(4, 4),
+            sight_tiles=16,
+        )
+        tracker.update_from_units({1: unit})
+        context = UnitLogicContext(
+            units_by_id={1: unit},
+            queue_command=queue_command,
+            queue_move=queue_move,
+            map_tracker=tracker,
+        )
+
+        state = logic._get_or_create_roam_state(unit)
+        state["phase"] = "sweep"
+        state["sweep_direction"] = "right"
+        state["vertical_direction"] = "down"
+        state["blocked_cells"] = {(5, 4), (4, 5), (3, 4)}
+
+        await logic.run(unit, context)
+
+        self.assertEqual(moves, [(1, "up")])
 
 
 if __name__ == "__main__":

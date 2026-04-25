@@ -29,6 +29,8 @@ class MapTracker:
         self._water_memory: set[tuple[int, int]] = set()
         self._detected_right_border: int | None = None
         self._detected_bottom_border: int | None = None
+        self._right_border_candidates: dict[int, set[int]] = {}
+        self._bottom_border_candidates: dict[int, set[int]] = {}
         self._last_unit_overlays: dict[tuple[int, int], str] = {}
         self._observation_version = 0
         self._write_map({})
@@ -162,15 +164,17 @@ class MapTracker:
         self,
         current_position: tuple[int, int],
         attempted_target: tuple[int, int],
+        *,
+        confirmed: bool = False,
     ) -> None:
         current_x, current_y = current_position
         target_x, target_y = attempted_target
         updated = False
 
         if target_x == current_x + 1 and target_y == current_y:
-            updated = self._record_right_border(current_x) or updated
+            updated = self._record_right_border(current_x, current_y, confirmed=confirmed) or updated
         elif target_x == current_x and target_y == current_y + 1:
-            updated = self._record_bottom_border(current_y) or updated
+            updated = self._record_bottom_border(current_y, current_x, confirmed=confirmed) or updated
 
         if not updated:
             return
@@ -178,17 +182,31 @@ class MapTracker:
         self._prune_cells_outside_detected_bounds()
         self._write_map(self._last_unit_overlays)
 
-    def _record_right_border(self, border_x: int) -> bool:
+    def _record_right_border(self, border_x: int, reporter_y: int, *, confirmed: bool) -> bool:
+        if not confirmed and not self._confirm_right_border_candidate(border_x, reporter_y):
+            return False
         if self._detected_right_border is None or border_x < self._detected_right_border:
             self._detected_right_border = border_x
             return True
         return False
 
-    def _record_bottom_border(self, border_y: int) -> bool:
+    def _record_bottom_border(self, border_y: int, reporter_x: int, *, confirmed: bool) -> bool:
+        if not confirmed and not self._confirm_bottom_border_candidate(border_y, reporter_x):
+            return False
         if self._detected_bottom_border is None or border_y < self._detected_bottom_border:
             self._detected_bottom_border = border_y
             return True
         return False
+
+    def _confirm_right_border_candidate(self, border_x: int, reporter_y: int) -> bool:
+        reporters = self._right_border_candidates.setdefault(border_x, set())
+        reporters.add(reporter_y)
+        return len(reporters) >= 2
+
+    def _confirm_bottom_border_candidate(self, border_y: int, reporter_x: int) -> bool:
+        reporters = self._bottom_border_candidates.setdefault(border_y, set())
+        reporters.add(reporter_x)
+        return len(reporters) >= 2
 
     def _prune_cells_outside_detected_bounds(self) -> None:
         self._known_cells = {
