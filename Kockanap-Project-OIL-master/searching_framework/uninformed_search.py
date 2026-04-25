@@ -146,7 +146,7 @@ def iterative_deepening_search(problem):
     """
     for depth in range(sys.maxsize):
         result = depth_limited_search(problem, depth)
-        if result != 'cutoff':
+        if result is not 'cutoff':
             return result
 
 
